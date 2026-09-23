@@ -1,0 +1,76 @@
+"""Copy the GPT-SoVITS files we use from a checkout and re-apply our patches.
+
+Usage:
+    python tools/sync_upstream.py <path to GPT-SoVITS checkout>
+
+Every patch must match exactly once, otherwise the script stops so the change
+can be reviewed by hand. Record the new commit in UPSTREAM.md afterwards.
+"""
+import pathlib
+import shutil
+import sys
+
+SRC = pathlib.Path(sys.argv[1]) / "GPT_SoVITS"
+ROOT = pathlib.Path(__file__).resolve().parent.parent / "vendor" / "gpt_sovits"
+
+FILES = [
+    "AR/models/t2s_model.py", "AR/models/utils.py",
+    "AR/modules/embedding.py", "AR/modules/transformer.py", "AR/modules/activation.py",
+    "AR/modules/scaling.py", "AR/modules/patched_mha_with_cache.py",
+    "module/models.py", "module/commons.py", "module/modules.py", "module/attentions.py",
+    "module/mrte_model.py", "module/quantize.py", "module/core_vq.py", "module/transforms.py",
+    "module/mel_processing.py", "text/symbols.py", "text/symbols2.py",
+]
+for f in FILES:
+    (ROOT / f).parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(SRC / f, ROOT / f)
+shutil.copyfile(SRC.parent / "LICENSE", ROOT / "LICENSE")
+
+P = []
+def p(f, old, new): P.append((f, old, new))
+
+# --- package-relative imports (upstream relies on sys.path hacks) ---
+p("AR/models/t2s_model.py", "from torchmetrics.classification import MulticlassAccuracy\n", "")
+p("AR/models/t2s_model.py", "from AR.models.utils import (", "from .utils import (")
+p("AR/models/t2s_model.py", """        self.ar_accuracy_metric = MulticlassAccuracy(
+            self.vocab_size,
+            top_k=top_k,
+            average="micro",
+            multidim_average="global",
+            ignore_index=self.EOS,
+        )
+""", "        # Anomalous_TTS: training accuracy metric (torchmetrics) removed.\n")
+p("AR/models/t2s_model.py", "from AR.modules.embedding import", "from ..modules.embedding import")
+p("AR/models/t2s_model.py", "from AR.modules.transformer import", "from ..modules.transformer import")
+p("AR/modules/transformer.py", "from AR.modules.activation import", "from .activation import")
+p("AR/modules/transformer.py", "from AR.modules.scaling import", "from .scaling import")
+p("AR/modules/activation.py", "from AR.modules.patched_mha_with_cache import", "from .patched_mha_with_cache import")
+p("module/models.py", "from module import commons\nfrom module import modules\nfrom module import attentions\nfrom f5_tts.model import DiT\n",
+  "from . import commons\nfrom . import modules\nfrom . import attentions\n# Anomalous_TTS: v3/v4 (DiT/CFM) not supported; import removed.\n")
+p("module/models.py", "from module.commons import init_weights, get_padding\nfrom module.mrte_model import MRTE\nfrom module.quantize import ResidualVectorQuantizer\n",
+  "from .commons import init_weights, get_padding\nfrom .mrte_model import MRTE\nfrom .quantize import ResidualVectorQuantizer\n")
+p("module/models.py", "from text import symbols as symbols_v1\nfrom text import symbols2 as symbols_v2\n",
+  "from ..text import symbols as symbols_v1\nfrom ..text import symbols2 as symbols_v2\n")
+p("module/modules.py", "from module import commons\nfrom module.commons import init_weights, get_padding\nfrom module.transforms import",
+  "from . import commons\nfrom .commons import init_weights, get_padding\nfrom .transforms import")
+p("module/attentions.py", "from module import commons\nfrom module.modules import LayerNorm", "from . import commons\nfrom .modules import LayerNorm")
+p("module/mrte_model.py", "from module.attentions import", "from .attentions import")
+p("module/quantize.py", "from module.core_vq import", "from .core_vq import")
+p("module/core_vq.py", "from module.distrib import broadcast_tensors, is_distributed\nfrom module.ddp_utils import SyncFunction\n",
+  "# Anomalous_TTS: distributed-training helpers removed; inference never calls them.\n"
+  "def broadcast_tensors(*args, **kwargs):\n    pass\n\n\ndef is_distributed():\n    return False\n\n\n"
+  "class SyncFunction:\n    @staticmethod\n    def apply(x):\n        return x\n\n\n")
+p("module/mel_processing.py", "from librosa.filters import mel as librosa_mel_fn\n",
+  "# Anomalous_TTS: librosa imported lazily; only mel_spectrogram needs it.\n"
+  "def librosa_mel_fn(*args, **kwargs):\n    from librosa.filters import mel\n\n    return mel(*args, **kwargs)\n")
+
+bad = 0
+for f, old, new in P:
+    path = ROOT / f
+    s = path.read_text(encoding="utf-8")
+    n = s.count(old)
+    if n != 1:
+        print(f"PATCH FAILED ({n} matches): {f}: {old[:60]!r}"); bad += 1; continue
+    path.write_text(s.replace(old, new), encoding="utf-8")
+print("patches applied:", len(P) - bad, "failed:", bad)
+sys.exit(1 if bad else 0)

@@ -1,0 +1,9 @@
+# torch / torchaudio / numpy come with ComfyUI.
+einops
+soundfile
+soxr
+transformers
+huggingface_hub
+tqdm
+# Japanese
+pyopenjtalk-plus
