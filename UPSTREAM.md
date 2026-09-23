@@ -15,6 +15,7 @@
 | `AR/modules/*.py`（5 个） | GPT 的 Transformer 结构 |
 | `module/models.py` 及 `commons` `modules` `attentions` `mrte_model` `quantize` `core_vq` `transforms` `mel_processing` | SoVITS：由语义 token 生成波形 |
 | `text/symbols.py`、`text/symbols2.py` | 音素表 |
+| `text/chinese2.py`、`tone_sandhi.py`、`opencpop-strict.txt`、`zh_normalization/`、`g2pw/`（含多音字词表） | 中文前端：文本规整、分词、变调、儿化、g2pW 多音字 |
 
 没有复制：训练代码、WebUI、`TTS_infer_pack`（官方推理主流程，由 `core/engine.py` 替代）、v3/v4 的 BigVGAN 和 CFM、UVR5、ASR、说话人识别（v2Pro 用，下一阶段加入）。
 
@@ -25,10 +26,24 @@
 3. `AR/models/t2s_model.py`：删掉训练用的 `torchmetrics` 精度统计。
 4. `module/core_vq.py`：分布式训练的三个工具函数换成空实现，推理用不到。
 5. `module/mel_processing.py`：librosa 改为用到时才导入（推理只用 `spectrogram_torch`，不需要 librosa）。
+6. `text/chinese2.py`：
+   - 删掉没用到的 `cn2an`。
+   - g2pW 不在导入时加载（上游写死了相对路径并会自动下载），改由 `enable_g2pw(模型目录, 分词器目录)` 按需加载；加载前走上游自带的 pypinyin 分支。
+   - 删掉 pypinyin 分支里每次都打印的调试输出。
+   - `jieba_fast` 装不上时退回纯 Python 的 `jieba`（70 句测试结果一致）。
+7. `text/tone_sandhi.py`：同上，`jieba_fast` → `jieba` 兜底。
+8. `text/g2pw/onnx_api.py`：`requests`、`opencc` 改为用到时才导入。
 
 `core/engine.py` 的推理流程照 `inference_webui.py` 的 `get_tts_wav` 重写，保留了上游的行为细节：参考音频限 3~10 秒、参考音频后补 0.3 秒静音、短句前补 "."、句末补标点、每句单独解码后按峰值归一化。
 
 `core/checkpoints.py` 的版本判断照 `process_ckpt.py`。不同之处：用 `torch.load(weights_only=True)` 加载，把权重里的 `utils.HParams` 映射到本地的空类，避免执行网上下载的模型里的任意代码。
+
+### 中文前端对拍结果（2026-09-24）
+
+70 句自编测试句（多音字、数字、日期、电话、儿化、语气词），本包与 GPT-SoVITS 官方 `chinese2.py`（g2pW 模式）音素完全一致，BERT 特征按官方 `get_bert_feature` 计算。
+
+为什么中文没用 Genie 的前端：Genie 用 g2pM 判断多音字，同样 70 句里有 16 句和官方不同，而且多是明显读错（"都市"读 dou、"还你"读 hai、"便宜"读 bian、"很长"读 zhang、"一只猫"读 zhi3）。连不用模型的 pypinyin 也只错 11 句。模型是用官方 g2pW 前端训练的，所以中文照搬官方。
+g2pW 需要 `opencc`（先把简体转成繁体再判断）。试过用 `zh_normalization/char_convert.py` 的逐字转换代替，会把"了"转成"瞭"读成 liao，不可用。
 
 ## Genie-TTS（`vendor/genie/`）
 

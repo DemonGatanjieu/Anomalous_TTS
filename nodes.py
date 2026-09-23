@@ -28,12 +28,12 @@ def get_engine() -> Engine:
     device = mm.get_torch_device()
     dtype = torch.float16 if device.type == "cuda" and mm.should_use_fp16(device) else torch.float32
     if _engine is None or _engine.device != device or _engine.dtype != dtype:
-        _engine = Engine(paths.hubert_dir(), device, dtype)
+        _engine = Engine(paths.ComfyResources(), device, dtype)
     return _engine
 
 
 LANG_NAMES = list(text_frontend.LANGUAGES.keys())
-IMPLEMENTED_LANGS = ["日语"]  # 中文 / 英语 are next; keep the list honest.
+IMPLEMENTED_LANGS = ["日语", "中文"]  # 英语 is next; keep the list honest.
 
 
 def _none_placeholder(values):
@@ -120,7 +120,8 @@ class AnomalousTTS_CharacterSpeech:
             ref_lang = text_frontend.LANGUAGES[reference_language]
         else:
             ref_lang = text_frontend.LIST_LANG_CODES.get(list_lang or "", text_lang)
-        if ref_text and ref_lang not in ("ja",):
+        implemented = {text_frontend.LANGUAGES[n] for n in IMPLEMENTED_LANGS}
+        if ref_text and ref_lang not in implemented:
             raise NotImplementedError(f"参考音频语言 {ref_lang} 还没有接入。")
         if not ref_text:
             log.warning("[Anomalous_TTS] %s 没有参考台词，使用无参考文本模式。", ref_rel)

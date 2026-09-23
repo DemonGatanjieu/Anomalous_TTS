@@ -11,7 +11,7 @@ import os
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, List, Optional, Protocol, Tuple
 
 import numpy as np
 import soundfile as sf
@@ -25,6 +25,16 @@ log = logging.getLogger("Anomalous_TTS")
 HZ = 50  # semantic tokens per second
 REF_MIN_SEC = 3.0
 REF_MAX_SEC = 10.0
+
+
+class Resources(Protocol):
+    """Where pretrained files live. Implemented by nodes.py (ComfyUI paths) and tests."""
+
+    def hubert_dir(self) -> str: ...
+
+    def roberta_dir(self) -> str: ...
+
+    def g2pw_dir(self) -> Optional[str]: ...
 
 
 @dataclass
@@ -112,11 +122,13 @@ class SoVITSModel:
 class Engine:
     """Holds loaded models and caches. One instance per process."""
 
-    def __init__(self, hubert_dir: str, device: torch.device, dtype: torch.dtype):
+    def __init__(self, resources: Resources, device: torch.device, dtype: torch.dtype):
         self.device = device
         self.dtype = dtype
-        self.hubert_dir = hubert_dir
+        self.resources = resources
         self._hubert = None
+        self._roberta = None
+        self._zh_ready = False
         self._gpt = _LRU(2)
         self._sovits = _LRU(2)
         self._refs = _LRU(16)
@@ -127,9 +139,50 @@ class Engine:
         if self._hubert is None:
             from transformers import HubertModel
 
-            model = HubertModel.from_pretrained(self.hubert_dir, local_files_only=True)
+            model = HubertModel.from_pretrained(self.resources.hubert_dir(), local_files_only=True)
             self._hubert = model.to(device=self.device, dtype=self.dtype).eval()
         return self._hubert
+
+    def roberta(self):
+        if self._roberta is None:
+            from transformers import AutoModelForMaskedLM, AutoTokenizer
+
+            path = self.resources.roberta_dir()
+            tokenizer = AutoTokenizer.from_pretrained(path, local_files_only=True)
+            model = AutoModelForMaskedLM.from_pretrained(path, local_files_only=True)
+            self._roberta = (tokenizer, model.to(device=self.device, dtype=self.dtype).eval())
+        return self._roberta
+
+    def _bert_feature(self, norm_text: str, word2ph: List[int]) -> torch.Tensor:
+        """GPT-SoVITS ``get_bert_feature``: 3rd-last hidden layer, repeated per phoneme."""
+        tokenizer, model = self.roberta()
+        inputs = tokenizer(norm_text, return_tensors="pt").to(self.device)
+        res = model(**inputs, output_hidden_states=True)
+        res = torch.cat(res["hidden_states"][-3:-2], -1)[0].float().cpu()[1:-1]
+        assert len(word2ph) == len(norm_text) == res.shape[0], (len(word2ph), len(norm_text), res.shape)
+        feats = [res[i].repeat(word2ph[i], 1) for i in range(len(word2ph))]
+        return torch.cat(feats, dim=0).T
+
+    def _prepare_language(self, lang: str) -> None:
+        """Chinese: use g2pW for polyphones when available, like GPT-SoVITS does."""
+        if lang != "zh" or self._zh_ready:
+            return
+        self._zh_ready = True
+        from ..vendor.gpt_sovits.text import chinese2
+
+        import importlib.util
+
+        if importlib.util.find_spec("opencc") is None:  # g2pW converts to Traditional Chinese first
+            log.warning("[Anomalous_TTS] 未安装 opencc，中文多音字改用 pypinyin 判断，准确率会下降。")
+            return
+        g2pw_dir = self.resources.g2pw_dir()
+        if not g2pw_dir:
+            log.warning("[Anomalous_TTS] 没有 G2PWModel，中文多音字改用 pypinyin 判断，准确率会下降。")
+            return
+        try:
+            chinese2.enable_g2pw(g2pw_dir, self.resources.roberta_dir())
+        except Exception as e:
+            log.warning("[Anomalous_TTS] G2PWModel 加载失败（%s），中文多音字改用 pypinyin 判断。", e)
 
     def gpt(self, path: str) -> GPTModel:
         return self._gpt.get_or_create(
@@ -144,6 +197,7 @@ class Engine:
     def unload(self):
         with self._lock:
             self._hubert = None
+            self._roberta = None
             self._gpt.clear()
             self._sovits.clear()
             self._refs.clear()
@@ -195,8 +249,9 @@ class Engine:
             bert = None
             if text:
                 prompt = self._prompt_semantic(sovits, wav_path)
+                self._prepare_language(lang)
                 phones, bert = text_frontend.get_phones_and_bert(
-                    text_frontend.ensure_sentence_end(text, lang), lang
+                    text_frontend.ensure_sentence_end(text, lang), lang, self._bert_feature
                 )
             return prompt, phones, bert, self._refer_spec(sovits, wav_path)
 
@@ -224,6 +279,7 @@ class Engine:
                 sovits_path, sovits, ref_wav, (ref_text or "").strip(), ref_lang
             )
             ref_free = prompt is None
+            self._prepare_language(text_lang)
 
             gen = torch.Generator(device="cpu").manual_seed(int(params.seed) & 0xFFFFFFFF)
             pause = np.zeros(int(sovits.sampling_rate * params.pause_sec), dtype=np.float32)
@@ -233,7 +289,7 @@ class Engine:
                 sentence = text_frontend.ensure_sentence_end(sentence, text_lang)
                 if not sentence.strip():
                     continue
-                phones2, bert2 = text_frontend.get_phones_and_bert(sentence, text_lang)
+                phones2, bert2 = text_frontend.get_phones_and_bert(sentence, text_lang, self._bert_feature)
                 if ref_free:
                     bert = bert2
                     all_ids = phones2

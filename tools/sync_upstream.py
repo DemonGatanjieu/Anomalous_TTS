@@ -20,6 +20,15 @@ FILES = [
     "module/models.py", "module/commons.py", "module/modules.py", "module/attentions.py",
     "module/mrte_model.py", "module/quantize.py", "module/core_vq.py", "module/transforms.py",
     "module/mel_processing.py", "text/symbols.py", "text/symbols2.py",
+    # Chinese front end
+    "text/chinese2.py", "text/tone_sandhi.py", "text/opencpop-strict.txt",
+    "text/zh_normalization/__init__.py", "text/zh_normalization/char_convert.py",
+    "text/zh_normalization/chronology.py", "text/zh_normalization/constants.py",
+    "text/zh_normalization/num.py", "text/zh_normalization/phonecode.py",
+    "text/zh_normalization/quantifier.py", "text/zh_normalization/text_normlization.py",
+    "text/g2pw/__init__.py", "text/g2pw/g2pw.py", "text/g2pw/onnx_api.py", "text/g2pw/dataset.py",
+    "text/g2pw/utils.py", "text/g2pw/polyphonic.pickle", "text/g2pw/polyphonic.rep",
+    "text/g2pw/polyphonic-fix.rep", "text/g2pw/polyphonic.md5",
 ]
 for f in FILES:
     (ROOT / f).parent.mkdir(parents=True, exist_ok=True)
@@ -63,6 +72,56 @@ p("module/core_vq.py", "from module.distrib import broadcast_tensors, is_distrib
 p("module/mel_processing.py", "from librosa.filters import mel as librosa_mel_fn\n",
   "# Anomalous_TTS: librosa imported lazily; only mel_spectrogram needs it.\n"
   "def librosa_mel_fn(*args, **kwargs):\n    from librosa.filters import mel\n\n    return mel(*args, **kwargs)\n")
+
+# --- Chinese front end ---
+p("text/chinese2.py", "import cn2an\n", "")
+p("text/chinese2.py", 'normalizer = lambda x: cn2an.transform(x, "an2cn")\n', "")
+p("text/chinese2.py", "from text.symbols import punctuation\nfrom text.tone_sandhi import ToneSandhi\nfrom text.zh_normalization.text_normlization import TextNormalizer\n",
+  "from .symbols import punctuation\nfrom .tone_sandhi import ToneSandhi\nfrom .zh_normalization.text_normlization import TextNormalizer\n")
+p("text/chinese2.py", """is_g2pw = True  # True if is_g2pw_str.lower() == 'true' else False
+if is_g2pw:
+    # print("当前使用g2pw进行拼音推理")
+    from text.g2pw import G2PWPinyin, correct_pronunciation
+
+    parent_directory = os.path.dirname(current_file_path)
+    g2pw = G2PWPinyin(
+        model_dir="GPT_SoVITS/text/G2PWModel",
+        model_source=os.environ.get("bert_path", "GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large"),
+        v_to_u=False,
+        neutral_tone_with_five=True,
+    )
+""", """# Anomalous_TTS: g2pW is loaded on demand by enable_g2pw(); until then pypinyin is used
+# (the same fallback GPT-SoVITS has when is_g2pw is False).
+is_g2pw = False
+g2pw = None
+correct_pronunciation = None
+
+
+def enable_g2pw(model_dir, tokenizer_dir):
+    global is_g2pw, g2pw, correct_pronunciation
+    from .g2pw import G2PWPinyin, correct_pronunciation as _correct
+
+    g2pw = G2PWPinyin(
+        model_dir=model_dir,
+        model_source=tokenizer_dir,
+        v_to_u=False,
+        neutral_tone_with_five=True,
+    )
+    correct_pronunciation = _correct
+    is_g2pw = True
+""")
+p("text/chinese2.py", '            print("pypinyin结果", initials, finals)\n', "")
+p("text/chinese2.py", "import jieba_fast\nimport logging\n\njieba_fast.setLogLevel(logging.CRITICAL)\nimport jieba_fast.posseg as psg\n",
+  "import logging\n\n# Anomalous_TTS: fall back to pure-Python jieba (same results) when jieba_fast has no wheel.\n"
+  "try:\n    import jieba_fast\n    import jieba_fast.posseg as psg\nexcept ImportError:\n    import jieba as jieba_fast\n    import jieba.posseg as psg\n\n"
+  "jieba_fast.setLogLevel(logging.CRITICAL)\n")
+p("text/tone_sandhi.py", "import jieba_fast as jieba\n",
+  "try:\n    import jieba_fast as jieba\nexcept ImportError:  # Anomalous_TTS: pure-Python fallback\n    import jieba\n")
+p("text/zh_normalization/__init__.py", "from text.zh_normalization.text_normlization import *", "from .text_normlization import *")
+p("text/g2pw/__init__.py", "from text.g2pw.g2pw import *", "from .g2pw import *")
+p("text/g2pw/onnx_api.py", "import requests\nfrom opencc import OpenCC\n", "")
+p("text/g2pw/onnx_api.py", "        with requests.get(modelscope_url, stream=True) as r:", "        import requests\n\n        with requests.get(modelscope_url, stream=True) as r:")
+p("text/g2pw/onnx_api.py", '            self.cc = OpenCC("s2tw")', '            from opencc import OpenCC\n\n            self.cc = OpenCC("s2tw")')
 
 bad = 0
 for f, old, new in P:

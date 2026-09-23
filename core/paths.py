@@ -27,6 +27,12 @@ PRETRAINED_DIRNAMES = ("pretrained", "pretrained_models")
 HF_REPO = "lj1995/GPT-SoVITS"
 HUBERT_NAME = "chinese-hubert-base"
 HUBERT_FILES = ("config.json", "preprocessor_config.json", "pytorch_model.bin")
+ROBERTA_NAME = "chinese-roberta-wwm-ext-large"
+ROBERTA_FILES = ("config.json", "tokenizer.json", "pytorch_model.bin")
+G2PW_NAME = "G2PWModel"
+G2PW_FILES = ("g2pW.onnx", "config.py", "POLYPHONIC_CHARS.txt", "MONOPHONIC_CHARS.txt")
+# Same source GPT-SoVITS downloads from (text/g2pw/onnx_api.py).
+G2PW_URL = "https://www.modelscope.cn/models/kamiorinn/g2pw/resolve/master/G2PWModel_1.1.zip"
 
 # Pinned to the GPT-SoVITS commit our vendored code comes from (see UPSTREAM.md).
 GSV_COMMIT = "48b1a0169a28582a8984402f82cf438d3bfa6aca"
@@ -71,26 +77,77 @@ def find_pretrained(name: str, required: tuple) -> Optional[str]:
     return None
 
 
-def hubert_dir() -> str:
-    """Return the chinese-hubert-base folder, downloading it on first use."""
+def _hf_pretrained(name: str, files: tuple) -> str:
+    """Return a pretrained folder from lj1995/GPT-SoVITS, downloading it on first use."""
     with _lock:
-        found = find_pretrained(HUBERT_NAME, HUBERT_FILES)
+        found = find_pretrained(name, files)
         if found:
             return found
         target = os.path.join(default_root(), "pretrained")
-        log.info("[Anomalous_TTS] 下载 %s 到 %s ...", HUBERT_NAME, target)
+        log.info("[Anomalous_TTS] 下载 %s 到 %s ...", name, target)
         try:
             from huggingface_hub import hf_hub_download
 
-            for f in HUBERT_FILES:
-                hf_hub_download(HF_REPO, f"{HUBERT_NAME}/{f}", local_dir=target)
+            for f in files:
+                hf_hub_download(HF_REPO, f"{name}/{f}", local_dir=target)
         except Exception as e:  # network, proxy, missing package
             raise RuntimeError(
-                f"无法下载 {HUBERT_NAME}（{e}）。请手动从 https://huggingface.co/{HF_REPO}/tree/main/{HUBERT_NAME} "
-                f"下载 {', '.join(HUBERT_FILES)}，放到 {os.path.join(target, HUBERT_NAME)}。"
+                f"无法下载 {name}（{e}）。请手动从 https://huggingface.co/{HF_REPO}/tree/main/{name} "
+                f"下载 {', '.join(files)}，放到 {os.path.join(target, name)}。"
                 "也可以在 extra_model_paths.yaml 里把 GPT-SoVITS 整合包的 GPT_SoVITS/pretrained_models 加到 gpt_sovits。"
             ) from e
-        return os.path.join(target, HUBERT_NAME)
+        return os.path.join(target, name)
+
+
+def hubert_dir() -> str:
+    return _hf_pretrained(HUBERT_NAME, HUBERT_FILES)
+
+
+def roberta_dir() -> str:
+    return _hf_pretrained(ROBERTA_NAME, ROBERTA_FILES)
+
+
+_g2pw_state = {"tried": False}
+
+
+def g2pw_dir() -> Optional[str]:
+    """Chinese polyphone model (~600MB). Returns None if unavailable; callers fall back to pypinyin."""
+    with _lock:
+        found = find_pretrained(G2PW_NAME, G2PW_FILES)
+        if found or _g2pw_state["tried"]:
+            return found
+        _g2pw_state["tried"] = True
+        target = os.path.join(default_root(), "pretrained")
+        os.makedirs(target, exist_ok=True)
+        zip_path = os.path.join(target, "G2PWModel_1.1.zip")
+        try:
+            import shutil
+            import zipfile
+
+            log.info("[Anomalous_TTS] 下载中文多音字模型 G2PWModel 到 %s ...", target)
+            urllib.request.urlretrieve(G2PW_URL, zip_path + ".part")
+            os.replace(zip_path + ".part", zip_path)
+            with zipfile.ZipFile(zip_path) as zf:
+                zf.extractall(target)
+            extracted = os.path.join(target, "G2PWModel_1.1")
+            final = os.path.join(target, G2PW_NAME)
+            if os.path.isdir(extracted) and not os.path.exists(final):
+                shutil.move(extracted, final)
+            os.remove(zip_path)
+        except Exception as e:
+            log.warning("[Anomalous_TTS] G2PWModel 下载失败：%s。可手动下载 %s 解压到 %s", e, G2PW_URL, target)
+            for leftover in (zip_path, zip_path + ".part"):
+                if os.path.exists(leftover):
+                    os.remove(leftover)
+        return find_pretrained(G2PW_NAME, G2PW_FILES)
+
+
+class ComfyResources:
+    """engine.Resources backed by ComfyUI model folders."""
+
+    hubert_dir = staticmethod(hubert_dir)
+    roberta_dir = staticmethod(roberta_dir)
+    g2pw_dir = staticmethod(g2pw_dir)
 
 
 _ja_userdict_state = {"done": False}

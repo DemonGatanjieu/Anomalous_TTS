@@ -7,3 +7,10 @@ huggingface_hub
 tqdm
 # Japanese
 pyopenjtalk-plus
+# Chinese
+pypinyin
+jieba
+opencc
+# Chinese polyphones (g2pW) also need onnxruntime or onnxruntime-gpu.
+# Not listed on purpose: installing onnxruntime next to onnxruntime-gpu breaks
+# other nodes. Without it, polyphones fall back to pypinyin.
