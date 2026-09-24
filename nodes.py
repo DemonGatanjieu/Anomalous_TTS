@@ -73,6 +73,15 @@ def _relative(value: str, c: characters.Character, chars) -> Optional[str]:
     return rel
 
 
+def _reference_path(value: str, c: characters.Character) -> Optional[str]:
+    value = (value or "").strip().replace("\\", "/")
+    if not value or value == AUTO:
+        return None
+    if value not in c.audio:
+        raise ValueError(f"角色 {c.name} 里没有参考音频 {value}（填角色文件夹里的相对路径，或留空自动选择）。")
+    return value
+
+
 class AnomalousTTS_CharacterSpeech:
     """用 GPT-SoVITS 角色模型读剧本。支持 {情绪}、[角色]、[pause:1s]。"""
 
@@ -87,7 +96,7 @@ class AnomalousTTS_CharacterSpeech:
 
     @classmethod
     def INPUT_TYPES(cls):
-        chars = characters.scan(force=True)
+        chars = characters.scan()
         names = list(chars.keys()) or ["（没有找到角色）"]
         return {
             "required": {
@@ -104,8 +113,12 @@ class AnomalousTTS_CharacterSpeech:
                 "speed": ("FLOAT", {"default": 1.0, "min": 0.5, "max": 2.0, "step": 0.05, "tooltip": "语速"}),
                 "language": (list(LANGUAGE_CHOICES), _adv({"default": AUTO, "tooltip": "自动：按每句文字判断"})),
                 "reference_audio": (
-                    [AUTO] + characters.combo_values(chars, "audio"),
-                    _adv({"tooltip": "主参考音频。自动：角色设置里的，或挑一条有台词的 3~10 秒音频"}),
+                    "STRING",
+                    _adv({
+                        "multiline": False,
+                        "default": "",
+                        "tooltip": "主参考音频：角色文件夹里的相对路径，例如 参考音频/xxx.wav。留空：用角色设置里的，或自动挑一条有台词的 3~10 秒音频",
+                    }),
                 ),
                 "reference_text": (
                     "STRING",
@@ -133,10 +146,10 @@ class AnomalousTTS_CharacterSpeech:
         stamp.append(os.path.getmtime(path) if os.path.exists(path) else 0)
         return repr(stamp)
 
-    def generate(self, character, text, seed, speed, language=AUTO, reference_audio=AUTO, reference_text="",
+    def generate(self, character, text, seed, speed, language=AUTO, reference_audio="", reference_text="",
                  gpt_weights=AUTO, sovits_weights=AUTO, pause_seconds=0.3, top_k=15, top_p=1.0,
                  temperature=1.0, repetition_penalty=1.35, batch_size=8):
-        chars = characters.scan(force=True)
+        chars = characters.scan(max_age=2.0)
         if character not in chars:
             raise ValueError(f"找不到角色：{character}")
         c = chars[character]
@@ -145,7 +158,7 @@ class AnomalousTTS_CharacterSpeech:
         opts = planner.NodeOptions(
             character=character,
             language=LANGUAGE_CHOICES.get(language, AUTO),
-            reference_audio=_relative(reference_audio, c, chars),
+            reference_audio=_reference_path(reference_audio, c),
             reference_text=reference_text,
             gpt=_relative(gpt_weights, c, chars),
             sovits=_relative(sovits_weights, c, chars),

@@ -95,3 +95,18 @@ def test_node_overrides(chars):
 def test_ambiguous_alias_without_language_hint(chars):
     with pytest.raises(ValueError):
         characters.resolve_name(chars, "阿罗娜", None)
+
+
+def test_extension_like_parts_are_not_emotions():
+    assert characters.emotion_of("a/X.ogg.wav") is None
+    assert characters.emotion_of("a/X.ogg (1).ogg") is None
+    assert characters.emotion_of("a/X.开心.wav") == "开心"
+    assert characters.emotion_of("a/X.wav") is None
+
+
+def test_api_summary_and_detail(chars):
+    c = chars["阿罗娜/日配"]
+    summary, detail = c.to_api(), c.to_api(detail=True)
+    assert "audio" not in summary and summary["counts"]["audio"] == 4
+    assert set(summary["emotions"]) == {"开心", "平静"} and summary["reference"]["audio"] == "ref/a.wav"
+    assert detail["audio"] == c.audio and detail["gpt"] == c.gpt

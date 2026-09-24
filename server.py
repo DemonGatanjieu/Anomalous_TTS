@@ -4,32 +4,37 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from aiohttp import web
 
 from .core import characters, settings
 
 log = logging.getLogger("Anomalous_TTS")
-API_FORMAT = 1
+API_FORMAT = 2
 
 
-def _characters_payload() -> Dict[str, Any]:
-    chars = characters.scan(force=True)
-    out = []
-    for c in chars.values():
-        try:
-            out.append(c.to_api())
-        except Exception as e:  # one broken folder must not hide the others
-            log.warning("[Anomalous_TTS] 读取角色 %s 失败：%s", c.name, e)
-            out.append({"name": c.name, "error": str(e)})
-    return {"format": API_FORMAT, "characters": out}
+def _summary(c: characters.Character, detail: bool) -> Dict[str, Any]:
+    try:
+        return c.to_api(detail=detail)
+    except Exception as e:  # one broken folder must not hide the others
+        log.warning("[Anomalous_TTS] 读取角色 %s 失败：%s", c.name, e)
+        return {"name": c.name, "error": str(e)}
+
+
+def _characters_payload(name: Optional[str], refresh: bool) -> Dict[str, Any]:
+    chars = characters.scan(max_age=0 if refresh else characters.CACHE_SECONDS)
+    if name is not None:
+        if name not in chars:
+            raise web.HTTPNotFound(text=f"找不到角色：{name}")
+        return {"format": API_FORMAT, "character": _summary(chars[name], detail=True)}
+    return {"format": API_FORMAT, "characters": [_summary(c, detail=False) for c in chars.values()]}
 
 
 def _save_settings(body: Dict[str, Any]) -> Dict[str, Any]:
     name = body.get("character")
     data = body.get("settings")
-    chars = characters.scan(force=True)
+    chars = characters.scan(max_age=0)
     if name not in chars:
         raise web.HTTPBadRequest(text=f"找不到角色：{name}")
     c = chars[name]
@@ -38,7 +43,7 @@ def _save_settings(body: Dict[str, Any]) -> Dict[str, Any]:
         raise web.HTTPBadRequest(text="；".join(problems))
     settings.save(c.folder, data)
     characters.invalidate()
-    return {"ok": True, "character": characters.scan(force=True)[name].to_api()}
+    return {"ok": True, "character": _summary(characters.scan()[name], detail=True)}
 
 
 def register(prompt_server) -> None:
@@ -46,7 +51,9 @@ def register(prompt_server) -> None:
 
     @routes.get("/anomalous_tts/characters")
     async def get_characters(request):
-        payload = await asyncio.get_running_loop().run_in_executor(None, _characters_payload)
+        name = request.query.get("name")
+        refresh = request.query.get("refresh") in ("1", "true")
+        payload = await asyncio.get_running_loop().run_in_executor(None, _characters_payload, name, refresh)
         return web.json_response(payload)
 
     @routes.get("/anomalous_tts/audio")

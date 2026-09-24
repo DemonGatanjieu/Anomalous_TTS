@@ -50,11 +50,21 @@ class Reference:
         return {"audio": self.audio, "text": self.text, "language": self.language, "source": self.source}
 
 
+# "X.ogg.wav" / "X.ogg (1).ogg" are converted or downloaded copies, not emotions.
+_NOT_EMOTION = re.compile(r"^(?:wav|ogg|mp3|flac|m4a|aac|opus|wma)(?:\s*\(\d+\))?$", re.I)
+
+
 def emotion_of(audio_rel: str) -> Optional[str]:
-    """``X.开心.wav`` -> ``开心``; ``X.wav`` -> None (same rule as Anomalous parse_voice_name)."""
+    """``X.开心.wav`` -> ``开心``; ``X.wav`` -> None (same rule as Anomalous parse_voice_name).
+
+    A part that is only an audio extension (``X.ogg.wav``, ``X.ogg (1).ogg``) is not an emotion.
+    """
     stem = os.path.splitext(os.path.basename(audio_rel))[0]
     _, sep, emotion = stem.partition(".")
-    return emotion.strip() if sep and emotion.strip() else None
+    emotion = emotion.strip()
+    if not sep or not emotion or _NOT_EMOTION.match(emotion):
+        return None
+    return emotion
 
 
 # ---------- annotation (.list) files ----------
@@ -85,14 +95,25 @@ def _read_list(path: str) -> Dict[str, Tuple[str, str]]:
     return table
 
 
-def _seconds(path: str) -> float:
-    import soundfile as sf
+_duration_cache: Dict[Tuple[str, int, int], float] = {}
 
+
+def _seconds(path: str) -> float:
+    """Audio length from the file header, cached by path + mtime + size."""
     try:
-        info = sf.info(path)
-        return info.frames / info.samplerate
-    except Exception:
+        st = os.stat(path)
+    except OSError:
         return 0.0
+    key = (path, st.st_mtime_ns, st.st_size)
+    if key not in _duration_cache:
+        import soundfile as sf
+
+        try:
+            info = sf.info(path)
+            _duration_cache[key] = info.frames / info.samplerate
+        except Exception:
+            _duration_cache[key] = 0.0
+    return _duration_cache[key]
 
 
 @dataclass
@@ -195,15 +216,20 @@ class Character:
             self.audio,
             key=lambda r: (os.path.splitext(os.path.basename(r))[0] != leaf, emotion_of(r) is not None, r),
         )
-        fallback = None
+
+        def usable(rel: str) -> bool:
+            return REF_MIN_SEC <= _seconds(self.abspath(rel)) <= REF_MAX_SEC
+
+        # Text lookups are cheap; reading audio headers is not (folders can hold ~1000 clips).
+        # So only measure clips that have text, and stop at the first usable one.
         for rel in ordered:
-            if not REF_MIN_SEC <= _seconds(self.abspath(rel)) <= REF_MAX_SEC:
-                continue
             ref = self.make_reference(rel, "auto")
-            if ref.text:
+            if ref.text and usable(rel):
                 return ref
-            fallback = fallback or ref
-        return fallback
+        for rel in ordered:
+            if usable(rel):
+                return self.make_reference(rel, "auto")
+        return None
 
     @cached_property
     def _emotions(self) -> Dict[str, Reference]:
@@ -219,21 +245,23 @@ class Character:
                     out[emotion.strip()] = self.make_reference(ref["audio"], "settings", ref)
         return out
 
-    def to_api(self) -> Dict[str, Any]:
+    def to_api(self, detail: bool = False) -> Dict[str, Any]:
+        """docs/INTERFACE.md §5. The list view leaves out the file lists (they can be long)."""
         ref = self.default_reference()
-        return {
+        out: Dict[str, Any] = {
             "name": self.name,
             "aliases": self.aliases,
             "language": self.language,
             "has_settings": os.path.isfile(os.path.join(self.folder, settings_mod.FILENAME)),
             "settings": self.settings,
             "settings_error": self.settings_error,
-            "gpt": self.gpt,
-            "sovits": self.sovits,
-            "audio": self.audio,
+            "counts": {"gpt": len(self.gpt), "sovits": len(self.sovits), "audio": len(self.audio)},
             "reference": ref.to_api() if ref else None,
             "emotions": {k: v.to_api() for k, v in self.emotions().items()},
         }
+        if detail:
+            out.update(gpt=self.gpt, sovits=self.sovits, audio=self.audio)
+        return out
 
 
 # ---------- discovery ----------
@@ -255,9 +283,9 @@ def _walk(folder: str, depth: int = 0, prefix: str = ""):
             yield rel
 
 
-def _has_weights(folder: str) -> bool:
+def _is_weights_pair(files: Iterable[str]) -> bool:
     gpt = sovits = False
-    for rel in _walk(folder):
+    for rel in files:
         low = rel.lower()
         gpt = gpt or low.endswith(".ckpt")
         sovits = sovits or low.endswith(".pth")
@@ -266,9 +294,11 @@ def _has_weights(folder: str) -> bool:
     return False
 
 
-def load_character(name: str, folder: str) -> Character:
+def _build(name: str, folder: str, files: Iterable[str]) -> Character:
     c = Character(name=name, folder=folder)
-    for rel in _walk(folder):
+    for rel in files:
+        if rel.count("/") > MAX_DEPTH:  # same depth limit for every character folder
+            continue
         ext = os.path.splitext(rel)[1].lower()
         if ext == ".ckpt":
             c.gpt.append(rel)
@@ -285,6 +315,10 @@ def load_character(name: str, folder: str) -> Character:
     return c
 
 
+def load_character(name: str, folder: str) -> Character:
+    return _build(name, folder, _walk(folder))
+
+
 def _subdirs(path: str):
     try:
         return sorted((e for e in os.scandir(path) if e.is_dir() and not _is_skipped(e.name)), key=lambda e: e.name)
@@ -293,40 +327,49 @@ def _subdirs(path: str):
 
 
 def discover(roots: Iterable[str]) -> Dict[str, Character]:
+    """Walk each top-level folder once; variants are split out of the same file list."""
     chars: Dict[str, Character] = {}
     for root in roots:
         for child in _subdirs(root):
-            variants = [s for s in _subdirs(child.path) if _has_weights(s.path)]
+            files = list(_walk(child.path, depth=-1))  # one level deeper, for variant folders
+            by_sub: Dict[str, List[str]] = {}
+            for rel in files:
+                head, sep, tail = rel.partition("/")
+                if sep:
+                    by_sub.setdefault(head, []).append(tail)
+            variants = [sub for sub, sub_files in sorted(by_sub.items()) if _is_weights_pair(sub_files)]
             if len(variants) >= 2:
-                found = [(f"{child.name}/{s.name}", s.path) for s in variants]
-            elif _has_weights(child.path):
-                found = [(child.name, child.path)]
+                found = [(f"{child.name}/{sub}", os.path.join(child.path, sub), by_sub[sub]) for sub in variants]
+            elif _is_weights_pair(f for f in files if f.count("/") <= MAX_DEPTH):
+                found = [(child.name, child.path, files)]
             else:
                 found = []
-            for name, folder in found:
+            for name, folder, sub_files in found:
                 unique, n = name, 2
                 while unique in chars:
                     unique, n = f"{name} ({n})", n + 1
-                chars[unique] = load_character(unique, folder)
+                chars[unique] = _build(unique, folder, sub_files)
     return chars
 
 
-_cache: Dict[str, Any] = {"time": 0.0, "chars": {}}
-CACHE_SECONDS = 5.0
+_cache: Dict[str, Any] = {"time": float("-inf"), "chars": {}}
+CACHE_SECONDS = 30.0
 
 
-def scan(force: bool = False) -> Dict[str, Character]:
+def scan(max_age: float = CACHE_SECONDS) -> Dict[str, Character]:
+    """All characters. Walking the folders is the expensive part, so results are reused
+    for ``max_age`` seconds (ComfyUI asks for the node definition often)."""
     from . import paths
 
     now = time.monotonic()
-    if force or now - _cache["time"] >= CACHE_SECONDS:
+    if now - _cache["time"] > max_age:
         _cache["chars"] = discover(paths.roots())
         _cache["time"] = now
     return _cache["chars"]
 
 
 def invalidate() -> None:
-    _cache["time"] = 0.0
+    _cache["time"] = float("-inf")
 
 
 # ---------- lookups ----------

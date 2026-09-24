@@ -1,6 +1,6 @@
 # Anomalous_TTS ↔ Anomalous Model Browser 接口约定
 
-版本：1（2026-09-24）
+版本：2（2026-09-25）
 
 两个项目在不同的对话里开发。这份文档是双方唯一的约定：**Anomalous 只依赖这里写的东西**，其余都是 Anomalous_TTS 的内部实现，可以随时改。
 
@@ -71,7 +71,7 @@ Anomalous 推送剧本时只需要设置两个输入：
 | `text` | 参考台词；不写就依次找：同名 `.txt` → 文件夹里的 GPT-SoVITS 标注文件（`.list` 或同格式 `.txt`，`路径|说话人|语言|台词`，先按文件名找，再按去掉情绪后缀的文件名找）→ 都没有则用无参考文本模式 |
 | `language`（参考里） | 参考台词语言；不写就用标注文件里的，再没有就按台词文字自动判断 |
 
-**优先级**（高 → 低）：节点上手动填的 → 设置文件 → 文件名约定（`原名.情绪.wav`，情绪名是文件名第一个点之后的部分）→ 自动挑选。
+**优先级**（高 → 低）：节点上手动填的 → 设置文件 → 文件名约定（`原名.情绪.wav`，情绪名是文件名第一个点之后的部分；只是音频扩展名的部分不算情绪，例如 `X.ogg.wav`、`X.ogg (1).ogg`）→ 自动挑选。
 
 ## 4. 剧本语法
 
@@ -96,11 +96,11 @@ Anomalous 推送剧本时只需要设置两个输入：
 
 ### `GET /anomalous_tts/characters`
 
-返回所有角色。每次调用都会重新扫描（有 5 秒缓存）。
+所有角色的摘要。服务器会缓存扫描结果 30 秒；加 `?refresh=1` 强制重新扫描（给“刷新”按钮用）。
 
 ```json
 {
-  "format": 1,
+  "format": 2,
   "characters": [
     {
       "name": "阿罗娜/日配数据集制",
@@ -108,10 +108,9 @@ Anomalous 推送剧本时只需要设置两个输入：
       "language": "ja",
       "has_settings": true,
       "settings": { "...": "anomalous_tts.json 原文，没有则为 {}" },
-      "gpt": ["成品模型/GPT_weights_v2/ALuoNa-e15.ckpt"],
-      "sovits": ["成品模型/SoVITS_weights_v2/ALuoNa_e16_s224.pth"],
-      "audio": ["参考音频/Arona_Academy_Talk_3.wav"],
-      "reference": { "audio": "参考音频/Arona_Academy_Talk_3.wav", "text": "…", "language": "ja" },
+      "settings_error": null,
+      "counts": { "gpt": 3, "sovits": 4, "audio": 135 },
+      "reference": { "audio": "参考音频/Arona_Academy_Talk_3.wav", "text": "…", "language": "ja", "source": "auto" },
       "emotions": {
         "开心": { "audio": "…", "text": "…", "language": "ja", "source": "settings" }
       }
@@ -120,8 +119,13 @@ Anomalous 推送剧本时只需要设置两个输入：
 }
 ```
 
-- `reference` / `emotions` 是解析后的最终结果（已经按第 3 节的优先级合并），`source` 为 `settings` 或 `filename`。`reference` 可能为 `null`（没有合适的 3~10 秒音频）。
-- `audio` 列出角色文件夹里的全部音频（相对路径）。
+- `reference` / `emotions` 是解析后的最终结果（已按第 3 节的优先级合并），`source` 为 `settings`、`filename` 或 `auto`。`reference` 可能为 `null`（没有 3~10 秒的音频）。
+- 摘要里**没有**文件列表（一个角色可能有上千个音频）。要文件列表时取单个角色的详情。
+- 读取失败的角色只有 `name` 和 `error`。
+
+### `GET /anomalous_tts/characters?name=<角色名>`
+
+单个角色的详情：`{"format": 2, "character": {…摘要字段…, "gpt": [...], "sovits": [...], "audio": [...]}}`。`gpt` / `sovits` / `audio` 是角色文件夹里的全部相对路径。找不到返回 404。
 
 ### `GET /anomalous_tts/audio?character=<name>&path=<相对路径>`
 
@@ -137,10 +141,11 @@ Anomalous 推送剧本时只需要设置两个输入：
 
 - `settings` 整体替换 `anomalous_tts.json`（先 GET、改、再 POST；保留不认识的字段）。
 - 服务器会校验：`gpt` / `sovits` / 各 `audio` 必须是这个角色文件夹里存在的文件；不合格返回 400 和原因。
-- 成功返回 `{"ok": true, "character": {…同 GET 的单个角色…}}`。
+- 成功返回 `{"ok": true, "character": {…同单个角色详情…}}`。
 
 ---
 
 ## 变更记录
 
 - 1（2026-09-24）：初版。
+- 2（2026-09-25）：`/anomalous_tts/characters` 列表只返回摘要（去掉 `gpt` / `sovits` / `audio`，加 `counts`），文件列表改由 `?name=` 取单个角色；加 `?refresh=1`；`format` 改为 2。文件名里只是扩展名的部分（`X.ogg.wav`）不再当作情绪。节点的 `reference_audio` 改为文本框（相对路径）。

@@ -48,6 +48,7 @@ models/gpt_sovits/
 - 权重默认用轮数最大的；设置文件或高级参数里可以指定。
 - 参考台词依次从：设置文件 → 同名 `.txt` → 标注文件（`.list`，或同格式 `.txt`：`音频路径|说话人|语言|台词`）里找；都没有就用无参考文本模式。
 - 情绪参考：设置文件里的 `emotions`，或把文件改名为 `原名.情绪.wav`（情绪名是第一个点后面的部分，和 F5-TTS、Anomalous 相同）。
+- 高级参数里的「reference_audio」填角色文件夹里的相对路径（例如 `参考音频/xxx.wav`），留空就自动选。
 - 设置文件格式见 [docs/INTERFACE.md](docs/INTERFACE.md) 第 3 节。
 
 已有的模型不用复制，在 `ComfyUI/extra_model_paths.yaml` 里加目录：
