@@ -40,6 +40,8 @@
 
 英语词典里有两个 pickle（`namedict_cache.pickle`，以及上游预生成的 `engdict_cache.pickle`）。本包只从固定版本的 GitHub 地址下载 `namedict_cache.pickle`；`engdict_cache.pickle` 在本地由 `cmudict.rep` 生成，除非目录里已经有（比如用户自己的 GPT-SoVITS 整合包）。
 
+`core/t2s_batch.py` 是批量 GPT 解码，改写自 `t2s_model.py` 的 `infer_panel_batch_infer` 和 `infer_panel_naive`：每句用自己的随机数生成器（结果只取决于这一句的种子，和同批的其他句子无关），支持无参考文本，停止规则同 `infer_panel_naive`。测试确认：单句时与官方 `infer_panel_naive` 生成的 token 完全相同；多句批量与逐句结果完全相同（CPU、fp32）。唯一不同：到 54 秒上限被强制截断时，官方会丢掉第一个 token，这里保留。
+
 `core/engine.py` 的推理流程照 `inference_webui.py` 的 `get_tts_wav` 重写，保留了上游的行为细节：参考音频限 3~10 秒、参考音频后补 0.3 秒静音、短句前补 "."、句末补标点、每句单独解码后按峰值归一化。
 
 `core/checkpoints.py` 的版本判断照 `process_ckpt.py`。不同之处：用 `torch.load(weights_only=True)` 加载，把权重里的 `utils.HParams` 映射到本地的空类，避免执行网上下载的模型里的任意代码。

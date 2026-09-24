@@ -20,16 +20,6 @@ import torch
 
 BERT_DIM = 1024
 
-# Display name -> internal code. Keep in sync with nodes.py.
-LANGUAGES = {
-    "日语": "ja",
-    "中文": "zh",
-    "英语": "en",
-}
-
-# Annotation files (.list) use these codes.
-LIST_LANG_CODES = {"JA": "ja", "JP": "ja", "ZH": "zh", "EN": "en"}
-
 # Sentence-ending punctuation used by GPT-SoVITS (``splits`` in the webui).
 SPLITS = set("，。？！,.?!~:：—…")
 

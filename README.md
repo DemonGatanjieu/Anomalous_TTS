@@ -1,58 +1,56 @@
 # Anomalous TTS (GPT-SoVITS)
 
-在 ComfyUI 里用自己训练的 GPT-SoVITS 角色模型读文字。**不需要另外安装 GPT-SoVITS 整合包**，推理代码已经精简后放在节点包里，直接用 ComfyUI 的 PyTorch 和显卡。
+在 ComfyUI 里用 GPT-SoVITS 角色模型读剧本。**不需要另外安装 GPT-SoVITS 整合包**：推理代码已经精简后放在节点包里，直接用 ComfyUI 的 PyTorch 和显卡。
 
-姊妹项目：[Anomalous Model Browser](https://github.com/DemonGatanjieu/Anomalous_Model_Browser)。
+姊妹项目：[Anomalous Model Browser](https://github.com/DemonGatanjieu/Anomalous_Model_Browser)（管理角色、标注情绪、写剧本）。两边的约定见 [docs/INTERFACE.md](docs/INTERFACE.md)。
 
 > 开发中，尚未发布。
 
-## 目前能做什么
+## 怎么用
 
-- 节点 **角色语音 (GPT-SoVITS)**（`AnomalousTTS_CharacterSpeech`），输出 ComfyUI 的 `AUDIO`，可接 Save Audio / Preview Audio。
-- 模型版本：v1、v2、v2Pro、v2ProPlus。v3 / v4 不支持。
-- 语言：日语、中文、英语。中文里夹的英文单词按英语读（和官方一样）；日文里的英文单词按片假名读（官方的 all_ja 模式）。
-- 可调：top_k、top_p、temperature、repetition_penalty、语速、句间停顿、随机种子（同一种子可复现同样的结果）。
-- 参考台词自动读取：同名 `.txt`，或 GPT-SoVITS 训练用的标注文件（`.list`，或同格式的 `.txt`，每行 `音频路径|角色|JA|台词`）。
-- 没有台词时自动改用无参考文本模式。
-- 情绪标签：文字里写 `{开心}`，之后的内容改用这个情绪的参考音频，`{main}` 切回主参考。
+1. 把角色模型放进 `ComfyUI/models/gpt_sovits/`（或用 `extra_model_paths.yaml` 指到现有文件夹，见下文）。
+2. 添加节点 **角色语音 (GPT-SoVITS)**（分类 `Anomalous/TTS`），选角色，写剧本，接 Save Audio / Preview Audio。
 
-## 情绪
+节点上平时只有：角色、剧本、「插入标签」按钮、种子、语速。其他（语言、参考音频、权重、采样参数、批量大小）在「高级参数」里，一般不用动。
 
-把某条参考音频的文件名改成 `原名.情绪.wav` 就成了这个情绪的参考，例如：
+## 剧本写法
 
 ```
-参考音频/Arona_AttendanceEvent03_Enter_1.开心.wav
+先生、おはようございます！{开心}今日もがんばりましょう！[pause:0.8]
+[普拉娜]……おはようございます、先生。
 ```
 
-- 情绪名是文件名里第一个点之后的部分，和 F5-TTS、Anomalous Model Browser 的规则相同。
-- 台词照常从同名 `.txt` 或标注文件里找；标注文件里写的是改名前的名字也能找到。
-- 同一个情绪有多条时，用文件名排序的第一条。
-- 剧本里用了没有对应文件的情绪，会在控制台提示，并改用主参考。
+| 写法 | 作用 |
+|---|---|
+| `{开心}` | 之后改用「开心」的参考音频；`{main}` 切回主参考 |
+| `[普拉娜]` | 之后换这个角色说（角色名或别名） |
+| `[pause:1]`、`[pause:500ms]`、`[停顿:1s]` | 插入停顿 |
 
-```
-先生、新しいお仕事です。{开心}わーい！ありがとうございます！{main}では、始めましょう。
-```
+「插入标签」按钮会列出当前角色有的情绪、其他角色、常用停顿，点一下就插到光标位置。
+写了不存在的情绪或角色不会报错：控制台提示，并继续用主参考 / 当前角色。
 
-## 放模型
+语言默认自动判断（有假名 → 日语；只有汉字 → 中文，日语模型则按日语；只有字母 → 英语）。中文里夹的英文单词按英语读；日文里的英文单词按片假名读（同官方）。
 
-默认目录是 `ComfyUI/models/gpt_sovits/`。每个角色一个文件夹，里面怎么分子文件夹都可以：
+## 角色文件夹
 
 ```
 models/gpt_sovits/
   阿罗娜/
-    日配/            ← 一个角色下有两套模型时，分别列为「阿罗娜/日配」「阿罗娜/中配」
-      GPT_weights_v2/ALuoNa-e15.ckpt
-      SoVITS_weights_v2/ALuoNa_e16_s224.pth
+    日配/                 ← 一个角色下有多套模型时，分别列为「阿罗娜/日配」「阿罗娜/中配」
+      GPT_weights_v2/*.ckpt
+      SoVITS_weights_v2/*.pth
       参考音频/*.wav
-      all.txt        ← 标注文件，用来查参考台词
-    中配/
-      ...
-  pretrained/        ← 底模，首次使用自动下载
+      all.txt              ← GPT-SoVITS 训练标注文件，用来查参考台词
+      anomalous_tts.json   ← 可选：角色设置（通常由 Anomalous 生成）
+  pretrained/              ← 底模，首次使用自动下载
 ```
 
-GPT 权重（`.ckpt`）和 SoVITS 权重（`.pth`）默认选轮数最大的，也可以在节点里指定。
+- 权重默认用轮数最大的；设置文件或高级参数里可以指定。
+- 参考台词依次从：设置文件 → 同名 `.txt` → 标注文件（`.list`，或同格式 `.txt`：`音频路径|说话人|语言|台词`）里找；都没有就用无参考文本模式。
+- 情绪参考：设置文件里的 `emotions`，或把文件改名为 `原名.情绪.wav`（情绪名是第一个点后面的部分，和 F5-TTS、Anomalous 相同）。
+- 设置文件格式见 [docs/INTERFACE.md](docs/INTERFACE.md) 第 3 节。
 
-已有的模型不用复制，在 `ComfyUI/extra_model_paths.yaml` 里加一个目录即可：
+已有的模型不用复制，在 `ComfyUI/extra_model_paths.yaml` 里加目录：
 
 ```yaml
 anomalous_tts:
@@ -60,7 +58,7 @@ anomalous_tts:
     gpt_sovits: 模型
 ```
 
-如果电脑上有 GPT-SoVITS 整合包，也可以把它的底模目录加进来，省掉下载（`text` 里有 G2PWModel）：
+电脑上有 GPT-SoVITS 整合包的话，把它的底模也加进来，省掉下载：
 
 ```yaml
 gpt_sovits_pretrained:
@@ -70,20 +68,37 @@ gpt_sovits_pretrained:
         text
 ```
 
-## 底模
+## 支持范围
 
-首次生成时自动下载到 `models/gpt_sovits/pretrained/`：
+- 模型：v1、v2、v2Pro、v2ProPlus。不支持 v3 / v4。
+- 语言：日语、中文、英语。
+- 速度：同一角色、同一参考的句子一起批量生成（`batch_size`，默认 8；显存不够就调小）。
+- 缓存：每句结果按「种子 + 句子内容 + 参数」缓存。改了剧本里的一句，再运行只重新生成这一句。同样的输入得到同样的声音；在 CPU 上已验证批量分组不影响结果（显卡半精度下可能有极细微的差别）。
+- ComfyUI 的「卸载模型 / 释放缓存」会一起释放本节点的模型。
 
-- `chinese-hubert-base`（约 190MB，HuggingFace `lj1995/GPT-SoVITS`）。网络不通时按报错提示手动下载。
-- 日语用户词典 `ja_userdic/userdict.csv`（17MB，GitHub）。下载失败不影响使用，只是日文里的英文单词会按字母读。
-- v2Pro / v2ProPlus：说话人识别模型 `sv/pretrained_eres2netv2w24s4ep4.ckpt`（约 100MB，HuggingFace）。
-- 英语：GPT-SoVITS 的英语词典（约 8MB，GitHub）和 nltk 词性标注数据（约 20MB，GitHub）。nltk 数据由本节点直接下载，不走 `nltk.download()`（新版 nltk 在有代理时会拒绝下载）。
-- 中文：`chinese-roberta-wwm-ext-large`（约 650MB，HuggingFace）和多音字模型 `G2PWModel`（约 600MB，ModelScope）。G2PWModel 下载失败、或没装 `opencc` / `onnxruntime` 时，多音字改用 pypinyin 判断，能用但准确率明显下降（测试的 50 句里有 11 句读音和官方不同）。
+## 底模（首次使用时自动下载到 `models/gpt_sovits/pretrained/`）
+
+| 用途 | 文件 | 大小 | 来源 |
+|---|---|---|---|
+| 所有 | `chinese-hubert-base` | 190MB | HuggingFace `lj1995/GPT-SoVITS` |
+| 中文 | `chinese-roberta-wwm-ext-large` | 650MB | HuggingFace |
+| 中文多音字 | `G2PWModel` | 600MB | ModelScope |
+| v2Pro | `sv/pretrained_eres2netv2w24s4ep4.ckpt` | 100MB | HuggingFace |
+| 日语里的英文单词 | `ja_userdic/userdict.csv` | 17MB | GitHub（GPT-SoVITS 固定版本） |
+| 英语 | 英语词典 + nltk 词性数据 | 约 30MB | GitHub |
+
+网络不通时按报错提示手动下载。G2PWModel、`opencc` 或 `onnxruntime` 缺失时，中文多音字改用 pypinyin 判断（能用，但准确率下降）。
 
 ## 依赖
 
-`requirements.txt` 里的包大多是 ComfyUI 自带或常见的。日语需要 `pyopenjtalk-plus`，中文需要 `pypinyin`、`jieba`、`opencc`，英语需要 `g2p_en`、`wordsegment`、`nltk`。只用到的语言才会加载对应的包。
+见 `requirements.txt`。只用到的语言才加载对应的包：日语 `pyopenjtalk-plus`；中文 `pypinyin`、`jieba`、`opencc`；英语 `g2p_en`、`wordsegment`、`nltk`。
+
+## 开发
+
+- 代码结构：`core/`（剧本解析 → 规划 → 推理）、`vendor/`（GPT-SoVITS 与 Genie-TTS 的原代码，只通过 `tools/sync_upstream.py` 打补丁）、`nodes.py`（ComfyUI 界面）、`server.py`（HTTP 接口）、`web/`（节点前端）。
+- 测试：见 [tests/README.md](tests/README.md)。
+- 上游代码来源与改动：[UPSTREAM.md](UPSTREAM.md)。
 
 ## 许可证
 
-MIT。内含 GPT-SoVITS 与 Genie-TTS 的部分代码（均为 MIT），出处和改动见 [UPSTREAM.md](UPSTREAM.md)。本包不附带任何角色模型或声音。
+MIT。内含 GPT-SoVITS 与 Genie-TTS 的部分代码（均为 MIT），出处见 [UPSTREAM.md](UPSTREAM.md)。本包不附带任何角色模型或声音。

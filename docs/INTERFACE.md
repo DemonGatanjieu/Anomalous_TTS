@@ -1,0 +1,146 @@
+# Anomalous_TTS ↔ Anomalous Model Browser 接口约定
+
+版本：1（2026-09-24）
+
+两个项目在不同的对话里开发。这份文档是双方唯一的约定：**Anomalous 只依赖这里写的东西**，其余都是 Anomalous_TTS 的内部实现，可以随时改。
+
+- 修改约定的一方负责同时更新两处：Anomalous_TTS 仓库的 `docs/INTERFACE.md`，以及 Claude 项目里的 `claude/anomalous-tts-interface.md`（两处内容相同）。
+- 只增加字段不算破坏；删除或改名字段、改变含义要把版本号加 1，并在文末“变更记录”写清楚。
+- Anomalous 读取时要容忍不认识的字段；写回角色设置时要原样保留不认识的字段。
+
+---
+
+## 1. 节点
+
+| 项 | 值 |
+|---|---|
+| 节点类名 | `AnomalousTTS_CharacterSpeech`（发布后不改） |
+| 显示名 | 角色语音 (GPT-SoVITS) |
+| 输出 | `AUDIO`（`{"waveform": [1, 1, T], "sample_rate": int}`） |
+
+Anomalous 推送剧本时只需要设置两个输入：
+
+| 输入 | 类型 | 说明 |
+|---|---|---|
+| `character` | 下拉 | 值 = 角色名（见第 2 节 `name`） |
+| `text` | 多行文本 | 剧本，语法见第 4 节 |
+
+其他输入都有默认值，Anomalous 不需要碰。需要时可以设置：`language`（`自动` / `日语` / `中文` / `英语`）、`seed`（整数）、`speed`（0.5–2.0）。
+
+## 2. 角色
+
+一个角色 = 一个文件夹，放在 ComfyUI 模型分类 `gpt_sovits` 的某个根目录下（默认 `ComfyUI/models/gpt_sovits/`，可以用 `extra_model_paths.yaml` 增加）。
+
+- 根目录下的每个子文件夹是一个角色；文件夹里（含子文件夹）至少要有一个 `.ckpt`（GPT 权重）和一个 `.pth`（SoVITS 权重）。
+- 如果这个子文件夹下面有 2 个及以上各自带权重的子文件夹（比如日配、中配），每个子文件夹单独算一个角色，名字是 `角色/子文件夹`。
+- 名字里的 `pretrained` 文件夹会被跳过。
+
+角色名（`name`）就是上面的相对名字，用 `/` 分隔，例如 `阿罗娜/日配数据集制`。
+
+## 3. 角色设置文件 `anomalous_tts.json`
+
+放在角色文件夹里，可选。**Anomalous 负责写，节点负责读。**所有字段都可选；路径都相对角色文件夹、用 `/` 分隔。
+
+```json
+{
+  "format": 1,
+  "aliases": ["阿罗娜"],
+  "language": "ja",
+  "gpt": "成品模型/GPT_weights_v2/ALuoNa-e15.ckpt",
+  "sovits": "成品模型/SoVITS_weights_v2/ALuoNa_e16_s224.pth",
+  "reference": {
+    "audio": "参考音频/Arona_Academy_Talk_3.wav",
+    "text": "通常授業！課外授業！自由時間！どれを選びますか？",
+    "language": "ja"
+  },
+  "emotions": {
+    "开心": { "audio": "参考音频/Arona_AttendanceEvent03_Enter_1.wav" },
+    "生气": { "audio": "参考音频/Arona_Work_Talk_3.wav", "text": "…", "language": "ja" }
+  }
+}
+```
+
+| 字段 | 含义 |
+|---|---|
+| `format` | 固定为 `1` |
+| `aliases` | 剧本里 `[名字]` 可以用的别名 |
+| `language` | 这个模型说的语言：`ja` / `zh` / `en`。用于同名角色有多个版本时挑选，以及参考台词语言的默认值 |
+| `gpt` / `sovits` | 默认权重；不写就用轮数最大的 |
+| `reference` | 主参考（剧本里没标情绪、或 `{main}` 的部分） |
+| `emotions` | 情绪名 → 参考。情绪名就是剧本里 `{情绪}` 里写的字 |
+| `text` | 参考台词；不写就依次找：同名 `.txt` → 文件夹里的 GPT-SoVITS 标注文件（`.list` 或同格式 `.txt`，`路径|说话人|语言|台词`，先按文件名找，再按去掉情绪后缀的文件名找）→ 都没有则用无参考文本模式 |
+| `language`（参考里） | 参考台词语言；不写就用标注文件里的，再没有就按台词文字自动判断 |
+
+**优先级**（高 → 低）：节点上手动填的 → 设置文件 → 文件名约定（`原名.情绪.wav`，情绪名是文件名第一个点之后的部分）→ 自动挑选。
+
+## 4. 剧本语法
+
+```
+先生、おはようございます！{开心}今日もがんばりましょう！[pause:0.8]
+[普拉娜]……おはようございます、先生。{main}今日の予定です。
+```
+
+| 写法 | 作用 |
+|---|---|
+| `{情绪}` | 之后改用这个情绪的参考；`{main}` 切回主参考。找不到的情绪：控制台警告，用主参考 |
+| `[角色]` | 之后改由这个角色说（名字或别名）。情绪回到 `main`。找不到的角色：控制台警告，继续用当前角色 |
+| `[pause:1.5]`、`[pause:500ms]`、`[停顿:1s]` | 插入停顿 |
+
+- 第一个 `[角色]` 之前的文字由节点上选的 `character` 说。
+- `[名字]` 同时匹配到多个角色版本时（比如 `阿罗娜` 对应日配、中配两个），选 `language` 和这句话语言一致的那个；还分不出来就报错，并列出候选。
+- 节点把文字按句切开生成；每句的随机数只由 种子 + 句子内容 决定，所以改了某一句，其他句子的结果不变，并且可以直接用缓存。
+
+## 5. HTTP 接口
+
+都挂在 ComfyUI 服务器上（默认 `http://127.0.0.1:8188`）。
+
+### `GET /anomalous_tts/characters`
+
+返回所有角色。每次调用都会重新扫描（有 5 秒缓存）。
+
+```json
+{
+  "format": 1,
+  "characters": [
+    {
+      "name": "阿罗娜/日配数据集制",
+      "aliases": ["阿罗娜"],
+      "language": "ja",
+      "has_settings": true,
+      "settings": { "...": "anomalous_tts.json 原文，没有则为 {}" },
+      "gpt": ["成品模型/GPT_weights_v2/ALuoNa-e15.ckpt"],
+      "sovits": ["成品模型/SoVITS_weights_v2/ALuoNa_e16_s224.pth"],
+      "audio": ["参考音频/Arona_Academy_Talk_3.wav"],
+      "reference": { "audio": "参考音频/Arona_Academy_Talk_3.wav", "text": "…", "language": "ja" },
+      "emotions": {
+        "开心": { "audio": "…", "text": "…", "language": "ja", "source": "settings" }
+      }
+    }
+  ]
+}
+```
+
+- `reference` / `emotions` 是解析后的最终结果（已经按第 3 节的优先级合并），`source` 为 `settings` 或 `filename`。`reference` 可能为 `null`（没有合适的 3~10 秒音频）。
+- `audio` 列出角色文件夹里的全部音频（相对路径）。
+
+### `GET /anomalous_tts/audio?character=<name>&path=<相对路径>`
+
+返回角色文件夹里的一个音频文件（用于试听）。只允许 `audio` 列表里的文件。
+
+### `POST /anomalous_tts/settings`
+
+写入角色设置文件。
+
+```json
+{ "character": "阿罗娜/日配数据集制", "settings": { "format": 1, "emotions": { "开心": { "audio": "参考音频/xxx.wav" } } } }
+```
+
+- `settings` 整体替换 `anomalous_tts.json`（先 GET、改、再 POST；保留不认识的字段）。
+- 服务器会校验：`gpt` / `sovits` / 各 `audio` 必须是这个角色文件夹里存在的文件；不合格返回 400 和原因。
+- 成功返回 `{"ok": true, "character": {…同 GET 的单个角色…}}`。
+
+---
+
+## 变更记录
+
+- 1（2026-09-24）：初版。

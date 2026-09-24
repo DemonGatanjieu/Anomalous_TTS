@@ -1,56 +1,37 @@
-"""GPT-SoVITS v1/v2 inference on PyTorch.
+"""GPT-SoVITS inference: turns a Plan (core/planner.py) into audio.
 
-The flow follows ``get_tts_wav`` in GPT-SoVITS ``inference_webui.py``
-(MIT, RVC-Boss), without Gradio, i18n, v3/v4 or training code.
+The per-sentence flow follows ``get_tts_wav`` in GPT-SoVITS
+``inference_webui.py`` (MIT, RVC-Boss). On top of it:
+
+- sentences that share a voice are decoded together in batches
+  (core/t2s_batch.py), each with its own random stream;
+- semantic tokens and audio are cached per sentence, so re-running a script
+  after editing one line only regenerates that line.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 import os
 import threading
-from collections import OrderedDict
-from dataclasses import dataclass
-from typing import Callable, List, Optional, Protocol, Tuple
+from dataclasses import dataclass, field
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
-import soundfile as sf
 import torch
 
-from . import text_frontend
-from .checkpoints import load_gpt_checkpoint, load_sovits_checkpoint
+from . import t2s_batch, text_frontend
+from .audio import load_mono, resample, silence
+from .models import LRU, GPTModel, Resources, SoVITSModel, file_key
+from .planner import Gap, Line, Plan, Voice
 
 log = logging.getLogger("Anomalous_TTS")
 
 HZ = 50  # semantic tokens per second
 REF_MIN_SEC = 3.0
 REF_MAX_SEC = 10.0
-
-
-class Resources(Protocol):
-    """Where pretrained files live. Implemented by nodes.py (ComfyUI paths) and tests."""
-
-    def hubert_dir(self) -> str: ...
-
-    def roberta_dir(self) -> str: ...
-
-    def g2pw_dir(self) -> Optional[str]: ...
-
-    def sv_path(self) -> str: ...
-
-    def english_dirs(self) -> Tuple[str, str, str]:
-        """(dictionary dir, writable cache dir, nltk data dir)"""
-
-
-@dataclass
-class Segment:
-    """Consecutive sentences that share one reference audio."""
-
-    ref_wav: str
-    ref_text: str
-    ref_lang: str
-    sentences: List[str]
-    label: str = "main"
+AUDIO_CACHE_BYTES = 256 * 1024 * 1024
 
 
 @dataclass
@@ -61,100 +42,62 @@ class SynthesisParams:
     repetition_penalty: float = 1.35
     speed: float = 1.0
     pause_sec: float = 0.3
-    seed: int = 0
+    batch_size: int = 8
+
+    def sampling_key(self) -> Tuple:
+        return (int(self.top_k), float(self.top_p), float(self.temperature), float(self.repetition_penalty))
 
 
-def _resample(wav: np.ndarray, sr_from: int, sr_to: int) -> np.ndarray:
-    if sr_from == sr_to:
-        return wav
-    import soxr
+@dataclass
+class Report:
+    lines: int = 0
+    generated: int = 0
+    from_cache: int = 0
+    batches: List[int] = field(default_factory=list)
 
-    # librosa.load(sr=...) uses soxr "HQ" by default; match it.
-    return soxr.resample(wav, sr_from, sr_to, quality="HQ").astype(np.float32)
-
-
-def load_mono(path: str) -> Tuple[np.ndarray, int]:
-    wav, sr = sf.read(path, dtype="float32", always_2d=True)
-    return wav.mean(axis=1), sr
-
-
-class _LRU(OrderedDict):
-    def __init__(self, capacity: int):
-        super().__init__()
-        self.capacity = capacity
-
-    def get_or_create(self, key, factory):
-        if key in self:
-            self.move_to_end(key)
-            return self[key]
-        value = factory()
-        self[key] = value
-        while len(self) > self.capacity:
-            self.popitem(last=False)
-        return value
-
-
-class GPTModel:
-    def __init__(self, path: str, device: torch.device, dtype: torch.dtype):
-        from ..vendor.gpt_sovits.AR.models.t2s_model import Text2SemanticDecoder
-
-        data = load_gpt_checkpoint(path)
-        config = data["config"]
-        self.max_sec = config["data"]["max_sec"]
-        model = Text2SemanticDecoder(config=config, top_k=3)
-        state = {k[len("model."):]: v for k, v in data["weight"].items() if k.startswith("model.")}
-        model.load_state_dict(state)
-        self.model = model.to(device=device, dtype=dtype).eval()
-
-
-class SoVITSModel:
-    def __init__(self, path: str, device: torch.device, dtype: torch.dtype):
-        from ..vendor.gpt_sovits.module.models import SynthesizerTrn
-
-        data, version = load_sovits_checkpoint(path)
-        self.is_v2pro = version in ("v2Pro", "v2ProPlus")
-        hps = data["config"]
-        hps["model"]["semantic_frame_rate"] = "25hz"
-        hps["model"]["version"] = version
-        d = hps["data"]
-        self.version = version
-        self.sampling_rate = d["sampling_rate"]
-        self.filter_length = d["filter_length"]
-        self.hop_length = d["hop_length"]
-        self.win_length = d["win_length"]
-        model = SynthesizerTrn(
-            self.filter_length // 2 + 1,
-            hps["train"]["segment_size"] // self.hop_length,
-            n_speakers=d["n_speakers"],
-            **hps["model"],
+    def summary(self) -> str:
+        return (
+            f"{self.lines} 句：新生成 {self.generated} 句（{len(self.batches)} 批），"
+            f"缓存 {self.from_cache} 句"
         )
-        if hasattr(model, "enc_q"):
-            del model.enc_q  # posterior encoder: training only
-        result = model.load_state_dict(data["weight"], strict=False)
-        if result.missing_keys:
-            log.warning("[Anomalous_TTS] %s 缺少 %d 个权重：%s", os.path.basename(path), len(result.missing_keys), result.missing_keys[:5])
-        self.model = model.to(device=device, dtype=dtype).eval()
+
+
+@dataclass
+class _Reference:
+    prompt: Optional[torch.Tensor]  # (P,) semantic tokens, None = no reference text
+    phones: List[int]
+    bert: Optional[torch.Tensor]  # (1024, len(phones))
+    spec: torch.Tensor
+    sv_emb: Optional[torch.Tensor]
 
 
 class Engine:
-    """Holds loaded models and caches. One instance per process."""
+    """Holds loaded models and caches. One instance per device/dtype."""
 
     def __init__(self, resources: Resources, device: torch.device, dtype: torch.dtype):
         self.device = device
         self.dtype = dtype
         self.resources = resources
+        self._lock = threading.Lock()
         self._hubert = None
         self._roberta = None
         self._sv = None
         self._zh_ready = False
         self._en_ready = False
-        self._warned = {}
-        self._gpt = _LRU(2)
-        self._sovits = _LRU(2)
-        self._refs = _LRU(16)
-        self._lock = threading.Lock()
+        self._warned: Dict[str, bool] = {}
+        self._gpt = LRU(capacity=3)
+        self._sovits = LRU(capacity=3)
+        self._refs = LRU(capacity=32)
+        self._tokens = LRU(capacity=4096)
+        self._audio = LRU(max_bytes=AUDIO_CACHE_BYTES, sizeof=lambda a: a[0].nbytes)
 
-    # ---------- model loading ----------
+    # ================= models =================
+    def gpt(self, path: str) -> GPTModel:
+        return self._gpt.get_or_create(file_key(path), lambda: GPTModel(path, self.device, self.dtype))
+
+    def sovits(self, path: str) -> SoVITSModel:
+        return self._sovits.get_or_create(file_key(path), lambda: SoVITSModel(path, self.device, self.dtype))
+
     def hubert(self):
         if self._hubert is None:
             from transformers import HubertModel
@@ -173,7 +116,27 @@ class Engine:
             self._roberta = (tokenizer, model.to(device=self.device, dtype=self.dtype).eval())
         return self._roberta
 
-    def _bert_feature(self, norm_text: str, word2ph: List[int]) -> torch.Tensor:
+    def sv(self):
+        """ERes2NetV2 speaker encoder for v2Pro / v2ProPlus (GPT-SoVITS ``sv.py``)."""
+        if self._sv is None:
+            from ..vendor.gpt_sovits.eres2net.ERes2NetV2 import ERes2NetV2
+
+            state = torch.load(self.resources.sv_path(), map_location="cpu", weights_only=True)
+            model = ERes2NetV2(baseWidth=24, scale=4, expansion=4)
+            model.load_state_dict(state)
+            self._sv = model.to(device=self.device, dtype=self.dtype).eval()
+        return self._sv
+
+    def unload(self) -> None:
+        """Free models (called by ComfyUI's "unload models"). Sentence caches are kept: they are small."""
+        with self._lock:
+            self._hubert = self._roberta = self._sv = None
+            self._gpt.clear()
+            self._sovits.clear()
+            self._refs.clear()
+
+    # ================= text_frontend.Context =================
+    def bert(self, norm_text: str, word2ph: List[int]) -> torch.Tensor:
         """GPT-SoVITS ``get_bert_feature``: 3rd-last hidden layer, repeated per phoneme."""
         tokenizer, model = self.roberta()
         inputs = tokenizer(norm_text, return_tensors="pt").to(self.device)
@@ -182,10 +145,6 @@ class Engine:
         assert len(word2ph) == len(norm_text) == res.shape[0], (len(word2ph), len(norm_text), res.shape)
         feats = [res[i].repeat(word2ph[i], 1) for i in range(len(word2ph))]
         return torch.cat(feats, dim=0).T
-
-    # text_frontend.Context
-    def bert(self, norm_text: str, word2ph: List[int]) -> torch.Tensor:
-        return self._bert_feature(norm_text, word2ph)
 
     def prepare(self, lang: str) -> None:
         if lang == "zh":
@@ -207,8 +166,6 @@ class Engine:
     def _prepare_english(self) -> None:
         if self._en_ready:
             return
-        import importlib.util
-
         missing = [m for m in ("g2p_en", "wordsegment", "nltk") if importlib.util.find_spec(m) is None]
         if missing:
             raise RuntimeError(
@@ -232,8 +189,6 @@ class Engine:
         self._zh_ready = True
         from ..vendor.gpt_sovits.text import chinese2
 
-        import importlib.util
-
         if importlib.util.find_spec("opencc") is None:  # g2pW converts to Traditional Chinese first
             log.warning("[Anomalous_TTS] 未安装 opencc，中文多音字改用 pypinyin 判断，准确率会下降。")
             return
@@ -246,62 +201,19 @@ class Engine:
         except Exception as e:
             log.warning("[Anomalous_TTS] G2PWModel 加载失败（%s），中文多音字改用 pypinyin 判断。", e)
 
-    def gpt(self, path: str) -> GPTModel:
-        return self._gpt.get_or_create(
-            (path, os.path.getmtime(path)), lambda: GPTModel(path, self.device, self.dtype)
-        )
-
-    def sovits(self, path: str) -> SoVITSModel:
-        return self._sovits.get_or_create(
-            (path, os.path.getmtime(path)), lambda: SoVITSModel(path, self.device, self.dtype)
-        )
-
-    def unload(self):
-        with self._lock:
-            self._hubert = None
-            self._roberta = None
-            self._sv = None
-            self._gpt.clear()
-            self._sovits.clear()
-            self._refs.clear()
-
-    # ---------- reference audio ----------
+    # ================= reference audio =================
     def _prompt_semantic(self, sovits: SoVITSModel, wav_path: str) -> torch.Tensor:
         wav, sr = load_mono(wav_path)
-        wav16k = _resample(wav, sr, 16000)
+        wav16k = resample(wav, sr, 16000)
         seconds = len(wav16k) / 16000
         if not REF_MIN_SEC <= seconds <= REF_MAX_SEC:
-            raise ValueError(
-                f"参考音频 {os.path.basename(wav_path)} 长 {seconds:.1f} 秒，需要在 3~10 秒之间。"
-            )
+            raise ValueError(f"参考音频 {os.path.basename(wav_path)} 长 {seconds:.1f} 秒，需要在 3~10 秒之间。")
         # GPT-SoVITS appends 0.3 s of silence measured at the model rate (quirk kept on purpose).
-        pad = np.zeros(int(sovits.sampling_rate * 0.3), dtype=np.float32)
-        x = torch.from_numpy(np.concatenate([wav16k, pad])).to(self.device, self.dtype)
+        x = torch.from_numpy(np.concatenate([wav16k, silence(0.3, sovits.sampling_rate)])).to(self.device, self.dtype)
         ssl = self.hubert()(x.unsqueeze(0))["last_hidden_state"].transpose(1, 2)
-        codes = sovits.model.extract_latent(ssl)
-        return codes[0, 0].unsqueeze(0)
+        return sovits.model.extract_latent(ssl)[0, 0]
 
-    def sv(self):
-        """ERes2NetV2 speaker encoder for v2Pro / v2ProPlus (GPT-SoVITS ``sv.py``)."""
-        if self._sv is None:
-            from ..vendor.gpt_sovits.eres2net.ERes2NetV2 import ERes2NetV2
-
-            state = torch.load(self.resources.sv_path(), map_location="cpu", weights_only=True)
-            model = ERes2NetV2(baseWidth=24, scale=4, expansion=4)
-            model.load_state_dict(state)
-            self._sv = model.to(device=self.device, dtype=self.dtype).eval()
-        return self._sv
-
-    def _sv_embedding(self, audio16k: torch.Tensor) -> torch.Tensor:
-        from ..vendor.gpt_sovits.eres2net import kaldi
-
-        wav = audio16k.to(self.device, self.dtype)
-        feat = torch.stack(
-            [kaldi.fbank(w.unsqueeze(0), num_mel_bins=80, sample_frequency=16000, dither=0) for w in wav]
-        )
-        return self.sv().forward3(feat)
-
-    def _refer_spec(self, sovits: SoVITSModel, wav_path: str) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    def _spec_and_sv(self, sovits: SoVITSModel, wav_path: str) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """GPT-SoVITS ``get_spepc``: spectrogram at the model rate, plus the v2Pro speaker embedding."""
         import torchaudio.functional as AF
 
@@ -315,111 +227,160 @@ class Engine:
         if maxx > 1:
             audio /= min(2, maxx)
         spec = spectrogram_torch(
-            audio.to(self.device),
-            sovits.filter_length,
-            sovits.sampling_rate,
-            sovits.hop_length,
-            sovits.win_length,
-            center=False,
+            audio.to(self.device), sovits.filter_length, sovits.sampling_rate,
+            sovits.hop_length, sovits.win_length, center=False,
         )
         sv_emb = None
         if sovits.is_v2pro:
-            sv_emb = self._sv_embedding(AF.resample(audio, sovits.sampling_rate, 16000))
+            from ..vendor.gpt_sovits.eres2net import kaldi
+
+            wav16 = AF.resample(audio, sovits.sampling_rate, 16000).to(self.device, self.dtype)
+            feat = torch.stack(
+                [kaldi.fbank(w.unsqueeze(0), num_mel_bins=80, sample_frequency=16000, dither=0) for w in wav16]
+            )
+            sv_emb = self.sv().forward3(feat)
         return spec.to(self.dtype), sv_emb
 
-    def _reference(self, sovits_path: str, sovits: SoVITSModel, wav_path: str, text: str, lang: str):
-        key = (sovits_path, wav_path, os.path.getmtime(wav_path), text, lang)
+    def _reference(self, voice: Voice, sovits: SoVITSModel) -> _Reference:
+        key = (file_key(voice.sovits_path), file_key(voice.ref_wav), voice.ref_text, voice.ref_lang)
 
-        def build():
-            prompt = None
-            phones = None
-            bert = None
-            if text:
-                prompt = self._prompt_semantic(sovits, wav_path)
-                phones, bert = text_frontend.get_phones_and_bert(
-                    text_frontend.ensure_sentence_end(text, lang), lang, self
-                )
-            refer, sv_emb = self._refer_spec(sovits, wav_path)
-            return prompt, phones, bert, refer, sv_emb
+        def build() -> _Reference:
+            spec, sv_emb = self._spec_and_sv(sovits, voice.ref_wav)
+            if not voice.ref_text:
+                return _Reference(None, [], None, spec, sv_emb)
+            prompt = self._prompt_semantic(sovits, voice.ref_wav)
+            phones, bert = text_frontend.get_phones_and_bert(
+                text_frontend.ensure_sentence_end(voice.ref_text, voice.ref_lang), voice.ref_lang, self
+            )
+            return _Reference(prompt, phones, bert, spec, sv_emb)
 
         return self._refs.get_or_create(key, build)
 
-    # ---------- synthesis ----------
-    @torch.inference_mode()
-    def synthesize(
-        self,
-        gpt_path: str,
-        sovits_path: str,
-        segments: List[Segment],
-        text_lang: str,
-        params: SynthesisParams,
-        progress: Optional[Callable[[int, int], None]] = None,
-    ) -> Tuple[np.ndarray, int]:
-        """Synthesize segments (each with its own reference) in order. Returns (float32 mono, sr)."""
-        with self._lock:
-            gpt = self.gpt(gpt_path)
-            sovits = self.sovits(sovits_path)
-
-            gen = torch.Generator(device="cpu").manual_seed(int(params.seed) & 0xFFFFFFFF)
-            pause = np.zeros(int(sovits.sampling_rate * params.pause_sec), dtype=np.float32)
-            pieces: List[np.ndarray] = []
-            total = sum(len(seg.sentences) for seg in segments)
-            done = 0
-            for seg in segments:
-                prompt, phones1, bert1, refer, sv_emb = self._reference(
-                    sovits_path, sovits, seg.ref_wav, (seg.ref_text or "").strip(), seg.ref_lang
-                )
-                for sentence in seg.sentences:
-                    done += 1
-                    sentence = text_frontend.ensure_sentence_end(sentence, text_lang)
-                    if sentence.strip():
-                        pieces.append(
-                            self._one_sentence(
-                                gpt, sovits, prompt, phones1, bert1, refer, sv_emb, sentence, text_lang, params, gen
-                            )
-                        )
-                        pieces.append(pause)
-                    if progress:
-                        progress(done, total)
-            if not pieces:
-                raise ValueError("没有可合成的文本。")
-            return np.concatenate(pieces).astype(np.float32), sovits.sampling_rate
-
-    def _one_sentence(
-        self, gpt, sovits, prompt, phones1, bert1, refer, sv_emb, sentence, lang, params, gen
-    ) -> np.ndarray:
-        phones2, bert2 = text_frontend.get_phones_and_bert(sentence, lang, self)
-        if prompt is None:  # no reference text
-            bert = bert2
-            all_ids = phones2
-        else:
-            bert = torch.cat([bert1, bert2], 1)
-            all_ids = phones1 + phones2
-        x = torch.LongTensor(all_ids).unsqueeze(0).to(self.device)
-        x_len = torch.tensor([x.shape[-1]], device=self.device)
-        bert = bert.unsqueeze(0).to(self.device, self.dtype)
-
-        # Sampling uses torch's global RNG; seed it per sentence for reproducibility.
-        torch.manual_seed(int(torch.randint(0, 2**31 - 1, (1,), generator=gen)))
-        pred, idx = gpt.model.infer_panel(
-            x,
-            x_len,
-            prompt,
-            bert,
-            top_k=int(params.top_k),
-            top_p=float(params.top_p),
-            temperature=float(params.temperature),
-            early_stop_num=HZ * gpt.max_sec,
-            repetition_penalty=float(params.repetition_penalty),
+    # ================= synthesis =================
+    def _line_keys(self, line: Line, params: SynthesisParams) -> Tuple[Tuple, Tuple]:
+        v = line.voice
+        token_key = (
+            file_key(v.gpt_path), file_key(v.sovits_path), file_key(v.ref_wav), v.ref_text, v.ref_lang,
+            line.text, line.language, line.seed, params.sampling_key(), str(self.dtype),
         )
-        pred = pred[:, -idx:].unsqueeze(0)
-        audio = sovits.model.decode(
-            pred,
-            torch.LongTensor(phones2).unsqueeze(0).to(self.device),
-            [refer],
-            speed=float(params.speed),
-            sv_emb=[sv_emb] if sovits.is_v2pro else None,
-        )[0][0]
+        audio_key = token_key + (float(params.speed),)
+        return token_key, audio_key
+
+    @torch.inference_mode()
+    def _generate_tokens(self, voice: Voice, lines: List[Line], keys: List[Tuple], params: SynthesisParams,
+                         out: Dict[Tuple, torch.Tensor], report: Report, tick: Callable[[], None]) -> None:
+        gpt = self.gpt(voice.gpt_path)
+        sovits = self.sovits(voice.sovits_path)
+        ref = self._reference(voice, sovits)
+        items = []
+        for line, key in zip(lines, keys):
+            phones, bert = text_frontend.get_phones_and_bert(
+                text_frontend.ensure_sentence_end(line.text, line.language), line.language, self
+            )
+            if ref.prompt is not None:
+                phones, bert = ref.phones + phones, torch.cat([ref.bert, bert], 1)
+            items.append((len(phones), phones, bert, line, key))
+        items.sort(key=lambda it: it[0])  # similar lengths batch better
+        size = max(1, int(params.batch_size))
+        for start in range(0, len(items), size):
+            chunk = items[start : start + size]
+            results = t2s_batch.decode(
+                gpt.model,
+                [torch.LongTensor(it[1]).to(self.device) for it in chunk],
+                [it[2].to(self.device, self.dtype) for it in chunk],
+                ref.prompt,
+                [it[3].seed for it in chunk],
+                top_k=int(params.top_k), top_p=float(params.top_p), temperature=float(params.temperature),
+                repetition_penalty=float(params.repetition_penalty), early_stop_num=HZ * gpt.max_sec,
+            )
+            report.batches.append(len(chunk))
+            for it, tokens in zip(chunk, results):
+                out[it[4]] = tokens.cpu()
+                self._tokens.put(it[4], out[it[4]])
+                tick()
+
+    @torch.inference_mode()
+    def _decode_audio(self, line: Line, tokens: torch.Tensor, params: SynthesisParams) -> np.ndarray:
+        voice = line.voice
+        sovits = self.sovits(voice.sovits_path)
+        ref = self._reference(voice, sovits)
+        phones, _ = text_frontend.get_phones_and_bert(
+            text_frontend.ensure_sentence_end(line.text, line.language), line.language, self
+        )
+        devices = [self.device] if self.device.type == "cuda" else []
+        with torch.random.fork_rng(devices=devices):  # decode adds noise; keep it per-line and leave global RNG alone
+            torch.manual_seed(line.seed)
+            audio = sovits.model.decode(
+                tokens.to(self.device).view(1, 1, -1),
+                torch.LongTensor(phones).unsqueeze(0).to(self.device),
+                [ref.spec],
+                speed=float(params.speed),
+                sv_emb=[ref.sv_emb] if sovits.is_v2pro else None,
+            )[0][0]
         audio = audio.float().cpu().numpy()
-        peak = np.abs(audio).max()
+        peak = float(np.abs(audio).max()) if audio.size else 0.0
         return audio / peak if peak > 1 else audio
+
+    def synthesize(
+        self, plan: Plan, params: SynthesisParams, progress: Optional[Callable[[int, int], None]] = None
+    ) -> Tuple[np.ndarray, int, Report]:
+        with self._lock:
+            lines = plan.lines
+            report = Report(lines=len(lines))
+            keys = [self._line_keys(line, params) for line in lines]
+            audio: Dict[Tuple, Tuple[np.ndarray, int]] = {}
+            tokens: Dict[Tuple, torch.Tensor] = {}
+            for token_key, audio_key in keys:
+                cached = self._audio.get(audio_key)
+                if cached is not None:
+                    audio[audio_key] = cached
+                elif token_key not in tokens and self._tokens.get(token_key) is not None:
+                    tokens[token_key] = self._tokens.get(token_key)
+            need_audio = sorted({i for i, (_, ak) in enumerate(keys) if ak not in audio})
+            need_tokens = [i for i in need_audio if keys[i][0] not in tokens]
+            total = len(need_tokens) + len(need_audio)
+            done = [0]
+
+            def tick():
+                done[0] += 1
+                if progress:
+                    progress(done[0], total)
+
+            groups: Dict[Voice, List[int]] = {}
+            for i in need_tokens:
+                groups.setdefault(lines[i].voice, []).append(i)
+            for voice, idxs in groups.items():
+                log.info("[Anomalous_TTS] %s：生成 %d 句", voice.label, len(idxs))
+                self._generate_tokens(
+                    voice, [lines[i] for i in idxs], [keys[i][0] for i in idxs], params, tokens, report, tick
+                )
+            for i in need_audio:
+                token_key, audio_key = keys[i]
+                if audio_key not in audio:  # the same line can appear twice with one key only if identical
+                    sr = self.sovits(lines[i].voice.sovits_path).sampling_rate
+                    audio[audio_key] = (self._decode_audio(lines[i], tokens[token_key], params), sr)
+                    self._audio.put(audio_key, audio[audio_key])
+                tick()
+            report.generated = len(need_audio)
+            report.from_cache = len(lines) - len(need_audio)
+            return self._assemble(plan, [audio[ak] for _, ak in keys], params) + (report,)
+
+    @staticmethod
+    def _assemble(plan: Plan, clips: List[Tuple[np.ndarray, int]], params: SynthesisParams) -> Tuple[np.ndarray, int]:
+        """Lines joined by the default pause; a [pause] tag replaces the default pause at that point."""
+        sr = clips[0][1]
+        pieces: List[np.ndarray] = []
+        gap: Optional[float] = None
+        n = 0
+        for item in plan.items:
+            if isinstance(item, Gap):
+                gap = item.seconds if gap is None else gap + item.seconds
+                continue
+            if pieces or gap:
+                pieces.append(silence(params.pause_sec if gap is None else gap, sr))
+            gap = None
+            clip, clip_sr = clips[n]
+            n += 1
+            pieces.append(resample(clip, clip_sr, sr))
+        pieces.append(silence(params.pause_sec if gap is None else gap, sr))  # tail, like GPT-SoVITS
+        return np.concatenate(pieces).astype(np.float32), sr

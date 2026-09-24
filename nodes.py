@@ -1,7 +1,8 @@
-"""ComfyUI nodes for Anomalous_TTS.
+"""ComfyUI nodes for Anomalous_TTS. Only widget definitions and glue live here;
+the logic is in core/ (planner → engine).
 
-Class names (``AnomalousTTS_*``) are part of the public contract: Anomalous
-Model Browser and saved workflows refer to them. Do not rename after release.
+Class names (``AnomalousTTS_*``) and the ``character`` / ``text`` inputs are part
+of the public contract (docs/INTERFACE.md §1). Do not rename them.
 """
 
 from __future__ import annotations
@@ -15,11 +16,13 @@ import torch
 import comfy.model_management as mm
 import comfy.utils
 
-from .core import characters, paths, script, text_frontend
-from .core.engine import Engine, Segment, SynthesisParams
-from .vendor.genie.text_splitter import TextSplitter
+from .core import characters, paths, planner
+from .core.engine import Engine, SynthesisParams
 
 log = logging.getLogger("Anomalous_TTS")
+
+AUTO = characters.AUTO
+LANGUAGE_CHOICES = {AUTO: AUTO, "日语": "ja", "中文": "zh", "英语": "en"}
 
 _engine: Optional[Engine] = None
 
@@ -33,7 +36,7 @@ def get_engine() -> Engine:
     return _engine
 
 
-def _hook_unload_all_models():
+def _hook_unload_all_models() -> None:
     """Let ComfyUI's "Unload models" / "Free model and node cache" also free our models.
 
     Our models are not ComfyUI ModelPatchers, so ComfyUI does not track them. Wrap
@@ -54,171 +57,123 @@ def _hook_unload_all_models():
 
 _hook_unload_all_models()
 
-LANG_NAMES = list(text_frontend.LANGUAGES.keys())
-IMPLEMENTED_LANGS = ["日语", "中文", "英语"]
+
+def _adv(options: dict) -> dict:
+    """Hide a widget under the node's "advanced" section (ComfyUI frontend ≥ 1.2x)."""
+    return {**options, "advanced": True}
 
 
-def _none_placeholder(values):
-    return values if values else ["（没有找到）"]
+def _relative(value: str, c: characters.Character, chars) -> Optional[str]:
+    """Combo value "角色名/相对路径" -> path relative to ``c``; AUTO -> None."""
+    if not value or value == AUTO:
+        return None
+    owner, rel = characters.split_combo(chars, value)
+    if owner.name != c.name:
+        raise ValueError(f"{value} 不属于角色 {c.name}。请重新选择，或选“{AUTO}”。")
+    return rel
 
 
 class AnomalousTTS_CharacterSpeech:
-    """用 GPT-SoVITS 角色模型把文字读出来。"""
+    """用 GPT-SoVITS 角色模型读剧本。支持 {情绪}、[角色]、[pause:1s]。"""
 
     CATEGORY = "Anomalous/TTS"
-    RETURN_TYPES = ("AUDIO",)
-    RETURN_NAMES = ("audio",)
+    RETURN_TYPES = ("AUDIO", "STRING")
+    RETURN_NAMES = ("audio", "info")
     FUNCTION = "generate"
+    DESCRIPTION = (
+        "用 GPT-SoVITS 角色模型读剧本。\n"
+        "{开心} 切换情绪，{main} 切回；[角色名] 换人说；[pause:1s] 插入停顿。"
+    )
 
     @classmethod
     def INPUT_TYPES(cls):
-        chars = list(characters.scan(force=True).keys())
-        auto = [characters.AUTO]
+        chars = characters.scan(force=True)
+        names = list(chars.keys()) or ["（没有找到角色）"]
         return {
             "required": {
-                "character": (_none_placeholder(chars), {"tooltip": "models/gpt_sovits 下的角色文件夹"}),
+                "character": (names, {"tooltip": "gpt_sovits 模型文件夹里的角色"}),
                 "text": (
                     "STRING",
                     {
                         "multiline": True,
                         "default": "",
-                        "tooltip": "要读的文字。写 {开心} 之类的标签可以切换情绪：之后的文字改用 名字.开心.wav 这条参考音频，{main} 切回主参考。",
+                        "tooltip": "剧本。{开心} 切换情绪、{main} 切回；[角色名] 换人说；[pause:1s] 插入停顿。",
                     },
                 ),
-                "text_language": (IMPLEMENTED_LANGS, {"default": "日语"}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF}),
+                "speed": ("FLOAT", {"default": 1.0, "min": 0.5, "max": 2.0, "step": 0.05, "tooltip": "语速"}),
+                "language": (list(LANGUAGE_CHOICES), _adv({"default": AUTO, "tooltip": "自动：按每句文字判断"})),
                 "reference_audio": (
-                    auto + characters.combo_values("audio"),
-                    {"tooltip": "自动：优先用有台词的 3~10 秒参考音频"},
+                    [AUTO] + characters.combo_values(chars, "audio"),
+                    _adv({"tooltip": "主参考音频。自动：角色设置里的，或挑一条有台词的 3~10 秒音频"}),
                 ),
                 "reference_text": (
                     "STRING",
-                    {
-                        "multiline": False,
-                        "default": "",
-                        "tooltip": "留空：从同名 .txt 或 .list 标注文件读取；都没有时用无参考文本模式（效果会差一些）",
-                    },
+                    _adv({"multiline": False, "default": "", "tooltip": "主参考的台词。留空：自动查找"}),
                 ),
-                "reference_language": (auto + IMPLEMENTED_LANGS, {"default": characters.AUTO}),
-                "gpt_weights": (auto + characters.combo_values("gpt"), {"tooltip": "自动：轮数最大的 .ckpt"}),
-                "sovits_weights": (auto + characters.combo_values("sovits"), {"tooltip": "自动：轮数最大的 .pth"}),
-                "top_k": ("INT", {"default": 15, "min": 1, "max": 100}),
-                "top_p": ("FLOAT", {"default": 1.0, "min": 0.05, "max": 1.0, "step": 0.05}),
-                "temperature": ("FLOAT", {"default": 1.0, "min": 0.05, "max": 2.0, "step": 0.05}),
-                "repetition_penalty": ("FLOAT", {"default": 1.35, "min": 1.0, "max": 2.0, "step": 0.05}),
-                "speed": ("FLOAT", {"default": 1.0, "min": 0.5, "max": 2.0, "step": 0.05}),
-                "pause_seconds": ("FLOAT", {"default": 0.3, "min": 0.0, "max": 2.0, "step": 0.05, "tooltip": "句与句之间的停顿"}),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFF}),
+                "gpt_weights": ([AUTO] + characters.combo_values(chars, "gpt"), _adv({"tooltip": "自动：设置里的，或轮数最大的"})),
+                "sovits_weights": ([AUTO] + characters.combo_values(chars, "sovits"), _adv({"tooltip": "自动：设置里的，或轮数最大的"})),
+                "pause_seconds": ("FLOAT", _adv({"default": 0.3, "min": 0.0, "max": 5.0, "step": 0.05, "tooltip": "句与句之间的停顿"})),
+                "top_k": ("INT", _adv({"default": 15, "min": 1, "max": 100})),
+                "top_p": ("FLOAT", _adv({"default": 1.0, "min": 0.05, "max": 1.0, "step": 0.05})),
+                "temperature": ("FLOAT", _adv({"default": 1.0, "min": 0.05, "max": 2.0, "step": 0.05})),
+                "repetition_penalty": ("FLOAT", _adv({"default": 1.35, "min": 1.0, "max": 2.0, "step": 0.05})),
+                "batch_size": ("INT", _adv({"default": 8, "min": 1, "max": 64, "tooltip": "一次同时生成几句。显存不够就调小"})),
             }
         }
 
-    def generate(
-        self,
-        character,
-        text,
-        text_language,
-        reference_audio,
-        reference_text,
-        reference_language,
-        gpt_weights,
-        sovits_weights,
-        top_k,
-        top_p,
-        temperature,
-        repetition_penalty,
-        speed,
-        pause_seconds,
-        seed,
-    ):
+    @classmethod
+    def IS_CHANGED(cls, character, **kwargs):
+        """Re-run when the character's files change (settings, audio, weights)."""
+        c = characters.scan().get(character)
+        if c is None:
+            return float("nan")
+        stamp = [c.name, len(c.audio), tuple(c.gpt), tuple(c.sovits)]
+        path = os.path.join(c.folder, "anomalous_tts.json")
+        stamp.append(os.path.getmtime(path) if os.path.exists(path) else 0)
+        return repr(stamp)
+
+    def generate(self, character, text, seed, speed, language=AUTO, reference_audio=AUTO, reference_text="",
+                 gpt_weights=AUTO, sovits_weights=AUTO, pause_seconds=0.3, top_k=15, top_p=1.0,
+                 temperature=1.0, repetition_penalty=1.35, batch_size=8):
         chars = characters.scan(force=True)
         if character not in chars:
             raise ValueError(f"找不到角色：{character}")
         c = chars[character]
-        text_lang = text_frontend.LANGUAGES[text_language]
-        implemented = {text_frontend.LANGUAGES[n] for n in IMPLEMENTED_LANGS}
-
-        def resolve_lang(list_lang):
-            if reference_language != characters.AUTO:
-                return text_frontend.LANGUAGES[reference_language]
-            return text_frontend.LIST_LANG_CODES.get(list_lang or "", text_lang)
-
-        def check(label, ref_rel, ref_text, ref_lang):
-            if ref_text and ref_lang not in implemented:
-                raise NotImplementedError(f"参考音频 {ref_rel} 的语言 {ref_lang} 还没有接入。")
-            if not ref_text:
-                log.warning("[Anomalous_TTS] {%s} %s 没有参考台词，使用无参考文本模式。", label, ref_rel)
-
-        # Main reference
-        if reference_audio == characters.AUTO:
-            main_rel, auto_text, list_lang = characters.default_reference(c)
-        else:
-            owner, main_rel = characters.split_combo(reference_audio)
-            if owner.name != c.name:
-                raise ValueError(f"参考音频 {reference_audio} 不属于角色 {c.name}。")
-            auto_text, list_lang = characters.reference_text(c, main_rel)
-        main_text = reference_text.strip() or auto_text
-        main_lang = resolve_lang(list_lang)
-
-        # Script -> segments, one reference each
-        emotion_files = characters.emotions(c)
-        refs = {}
-        segments = []
-        for emotion, part in script.parse(text):
-            if emotion != script.MAIN and emotion not in emotion_files:
-                log.warning(
-                    "[Anomalous_TTS] 角色 %s 没有情绪 {%s} 的参考音频（文件名应为 名字.%s.wav），改用主参考。已有：%s",
-                    c.name, emotion, emotion, "、".join(emotion_files) or "无",
-                )
-                emotion = script.MAIN
-            if emotion not in refs:
-                if emotion == script.MAIN:
-                    refs[emotion] = (main_rel, main_text, main_lang)
-                else:
-                    rel = emotion_files[emotion]
-                    t, ll = characters.reference_text(c, rel)
-                    refs[emotion] = (rel, t, resolve_lang(ll))
-                check(emotion, *refs[emotion])
-            rel, t, lang = refs[emotion]
-            sentences = TextSplitter().split(part)
-            if segments and segments[-1].label == emotion:
-                segments[-1].sentences.extend(sentences)
-            elif sentences:
-                segments.append(Segment(c.abspath(rel), t, lang, sentences, label=emotion))
-        if not segments:
-            raise ValueError("请输入要读的文字。")
-        for seg in segments:
-            log.info("[Anomalous_TTS] {%s} %s：%d 句", seg.label, os.path.basename(seg.ref_wav), len(seg.sentences))
-
-        gpt_path = characters.pick_weight(c, "gpt", gpt_weights)
-        sovits_path = characters.pick_weight(c, "sovits", sovits_weights)
-        if "ja" in {text_lang} | {seg.ref_lang for seg in segments}:
+        if c.settings_error:
+            log.warning("[Anomalous_TTS] %s", c.settings_error)
+        opts = planner.NodeOptions(
+            character=character,
+            language=LANGUAGE_CHOICES.get(language, AUTO),
+            reference_audio=_relative(reference_audio, c, chars),
+            reference_text=reference_text,
+            gpt=_relative(gpt_weights, c, chars),
+            sovits=_relative(sovits_weights, c, chars),
+            seed=seed,
+        )
+        plan = planner.build_plan(chars, opts, text)
+        for message in plan.warnings:
+            log.warning("[Anomalous_TTS] %s", message)
+        if "ja" in {line.language for line in plan.lines} | {line.voice.ref_lang for line in plan.lines}:
             paths.ensure_ja_userdict()
 
-        engine = get_engine()
-        total = sum(len(seg.sentences) for seg in segments)
-        bar = comfy.utils.ProgressBar(total)
+        bar = comfy.utils.ProgressBar(1)
 
         def progress(done, total):
-            bar.update_absolute(done, total)
+            bar.update_absolute(done, max(total, 1))
             mm.throw_exception_if_processing_interrupted()
 
-        wav, sr = engine.synthesize(
-            gpt_path,
-            sovits_path,
-            segments,
-            text_lang,
+        wav, sr, report = get_engine().synthesize(
+            plan,
             SynthesisParams(
-                top_k=top_k,
-                top_p=top_p,
-                temperature=temperature,
-                repetition_penalty=repetition_penalty,
-                speed=speed,
-                pause_sec=pause_seconds,
-                seed=seed,
+                top_k=top_k, top_p=top_p, temperature=temperature, repetition_penalty=repetition_penalty,
+                speed=speed, pause_sec=pause_seconds, batch_size=batch_size,
             ),
             progress=progress,
         )
-        waveform = torch.from_numpy(wav).reshape(1, 1, -1)
-        return ({"waveform": waveform, "sample_rate": sr},)
+        log.info("[Anomalous_TTS] %s", report.summary())
+        info = "\n".join([report.summary()] + plan.warnings)
+        return ({"waveform": torch.from_numpy(wav).reshape(1, 1, -1), "sample_rate": sr}, info)
 
 
 NODE_CLASS_MAPPINGS = {
