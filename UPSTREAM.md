@@ -42,7 +42,7 @@
 
 70 句自编测试句（多音字、数字、日期、电话、儿化、语气词），本包与 GPT-SoVITS 官方 `chinese2.py`（g2pW 模式）音素完全一致，BERT 特征按官方 `get_bert_feature` 计算。
 
-为什么中文没用 Genie 的前端：Genie 用 g2pM 判断多音字，同样 70 句里有 16 句和官方不同，而且多是明显读错（"都市"读 dou、"还你"读 hai、"便宜"读 bian、"很长"读 zhang、"一只猫"读 zhi3）。连不用模型的 pypinyin 也只错 11 句。模型是用官方 g2pW 前端训练的，所以中文照搬官方。
+为什么中文没用 Genie 的前端：Genie 用 g2pM 判断多音字，其中前 50 句里有 16 句和官方不同，而且多是明显读错（"都市"读 dou、"还你"读 hai、"便宜"读 bian、"很长"读 zhang、"一只猫"读 zhi3）。同样 50 句，不用模型的 pypinyin 也只有 11 句不同。模型是用官方 g2pW 前端训练的，所以中文照搬官方。
 g2pW 需要 `opencc`（先把简体转成繁体再判断）。试过用 `zh_normalization/char_convert.py` 的逐字转换代替，会把"了"转成"瞭"读成 liao，不可用。
 
 ## Genie-TTS（`vendor/genie/`）

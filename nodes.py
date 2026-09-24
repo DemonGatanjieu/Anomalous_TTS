@@ -7,6 +7,7 @@ Model Browser and saved workflows refer to them. Do not rename after release.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Optional
 
 import torch
@@ -14,8 +15,8 @@ import torch
 import comfy.model_management as mm
 import comfy.utils
 
-from .core import characters, paths, text_frontend
-from .core.engine import Engine, SynthesisParams
+from .core import characters, paths, script, text_frontend
+from .core.engine import Engine, Segment, SynthesisParams
 from .vendor.genie.text_splitter import TextSplitter
 
 log = logging.getLogger("Anomalous_TTS")
@@ -55,7 +56,14 @@ class AnomalousTTS_CharacterSpeech:
         return {
             "required": {
                 "character": (_none_placeholder(chars), {"tooltip": "models/gpt_sovits 下的角色文件夹"}),
-                "text": ("STRING", {"multiline": True, "default": "", "tooltip": "要读的文字"}),
+                "text": (
+                    "STRING",
+                    {
+                        "multiline": True,
+                        "default": "",
+                        "tooltip": "要读的文字。写 {开心} 之类的标签可以切换情绪：之后的文字改用 名字.开心.wav 这条参考音频，{main} 切回主参考。",
+                    },
+                ),
                 "text_language": (IMPLEMENTED_LANGS, {"default": "日语"}),
                 "reference_audio": (
                     auto + characters.combo_values("audio"),
@@ -105,38 +113,68 @@ class AnomalousTTS_CharacterSpeech:
             raise ValueError(f"找不到角色：{character}")
         c = chars[character]
         text_lang = text_frontend.LANGUAGES[text_language]
+        implemented = {text_frontend.LANGUAGES[n] for n in IMPLEMENTED_LANGS}
 
-        # Reference audio + text
-        list_lang = None
+        def resolve_lang(list_lang):
+            if reference_language != characters.AUTO:
+                return text_frontend.LANGUAGES[reference_language]
+            return text_frontend.LIST_LANG_CODES.get(list_lang or "", text_lang)
+
+        def check(label, ref_rel, ref_text, ref_lang):
+            if ref_text and ref_lang not in implemented:
+                raise NotImplementedError(f"参考音频 {ref_rel} 的语言 {ref_lang} 还没有接入。")
+            if not ref_text:
+                log.warning("[Anomalous_TTS] {%s} %s 没有参考台词，使用无参考文本模式。", label, ref_rel)
+
+        # Main reference
         if reference_audio == characters.AUTO:
-            ref_rel, auto_text, list_lang = characters.default_reference(c)
+            main_rel, auto_text, list_lang = characters.default_reference(c)
         else:
-            owner, ref_rel = characters.split_combo(reference_audio)
+            owner, main_rel = characters.split_combo(reference_audio)
             if owner.name != c.name:
                 raise ValueError(f"参考音频 {reference_audio} 不属于角色 {c.name}。")
-            auto_text, list_lang = characters.reference_text(c, ref_rel)
-        ref_text = reference_text.strip() or auto_text
-        if reference_language != characters.AUTO:
-            ref_lang = text_frontend.LANGUAGES[reference_language]
-        else:
-            ref_lang = text_frontend.LIST_LANG_CODES.get(list_lang or "", text_lang)
-        implemented = {text_frontend.LANGUAGES[n] for n in IMPLEMENTED_LANGS}
-        if ref_text and ref_lang not in implemented:
-            raise NotImplementedError(f"参考音频语言 {ref_lang} 还没有接入。")
-        if not ref_text:
-            log.warning("[Anomalous_TTS] %s 没有参考台词，使用无参考文本模式。", ref_rel)
+            auto_text, list_lang = characters.reference_text(c, main_rel)
+        main_text = reference_text.strip() or auto_text
+        main_lang = resolve_lang(list_lang)
+
+        # Script -> segments, one reference each
+        emotion_files = characters.emotions(c)
+        refs = {}
+        segments = []
+        for emotion, part in script.parse(text):
+            if emotion != script.MAIN and emotion not in emotion_files:
+                log.warning(
+                    "[Anomalous_TTS] 角色 %s 没有情绪 {%s} 的参考音频（文件名应为 名字.%s.wav），改用主参考。已有：%s",
+                    c.name, emotion, emotion, "、".join(emotion_files) or "无",
+                )
+                emotion = script.MAIN
+            if emotion not in refs:
+                if emotion == script.MAIN:
+                    refs[emotion] = (main_rel, main_text, main_lang)
+                else:
+                    rel = emotion_files[emotion]
+                    t, ll = characters.reference_text(c, rel)
+                    refs[emotion] = (rel, t, resolve_lang(ll))
+                check(emotion, *refs[emotion])
+            rel, t, lang = refs[emotion]
+            sentences = TextSplitter().split(part)
+            if segments and segments[-1].label == emotion:
+                segments[-1].sentences.extend(sentences)
+            elif sentences:
+                segments.append(Segment(c.abspath(rel), t, lang, sentences, label=emotion))
+        if not segments:
+            raise ValueError("请输入要读的文字。")
+        for seg in segments:
+            log.info("[Anomalous_TTS] {%s} %s：%d 句", seg.label, os.path.basename(seg.ref_wav), len(seg.sentences))
 
         gpt_path = characters.pick_weight(c, "gpt", gpt_weights)
         sovits_path = characters.pick_weight(c, "sovits", sovits_weights)
-
-        sentences = TextSplitter().split(text)
-        if not sentences:
-            raise ValueError("请输入要读的文字。")
-        if "ja" in (text_lang, ref_lang):
+        if "ja" in {text_lang} | {seg.ref_lang for seg in segments}:
             paths.ensure_ja_userdict()
 
         engine = get_engine()
-        bar = comfy.utils.ProgressBar(len(sentences))
+        total = sum(len(seg.sentences) for seg in segments)
+        bar = comfy.utils.ProgressBar(total)
 
         def progress(done, total):
             bar.update_absolute(done, total)
@@ -145,10 +183,7 @@ class AnomalousTTS_CharacterSpeech:
         wav, sr = engine.synthesize(
             gpt_path,
             sovits_path,
-            c.abspath(ref_rel),
-            ref_text,
-            ref_lang,
-            sentences,
+            segments,
             text_lang,
             SynthesisParams(
                 top_k=top_k,

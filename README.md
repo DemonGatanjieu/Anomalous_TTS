@@ -14,6 +14,24 @@
 - 可调：top_k、top_p、temperature、repetition_penalty、语速、句间停顿、随机种子（同一种子可复现同样的结果）。
 - 参考台词自动读取：同名 `.txt`，或 GPT-SoVITS 训练用的标注文件（`.list`，或同格式的 `.txt`，每行 `音频路径|角色|JA|台词`）。
 - 没有台词时自动改用无参考文本模式。
+- 情绪标签：文字里写 `{开心}`，之后的内容改用这个情绪的参考音频，`{main}` 切回主参考。
+
+## 情绪
+
+把某条参考音频的文件名改成 `原名.情绪.wav` 就成了这个情绪的参考，例如：
+
+```
+参考音频/Arona_AttendanceEvent03_Enter_1.开心.wav
+```
+
+- 情绪名是文件名里第一个点之后的部分，和 F5-TTS、Anomalous Model Browser 的规则相同。
+- 台词照常从同名 `.txt` 或标注文件里找；标注文件里写的是改名前的名字也能找到。
+- 同一个情绪有多条时，用文件名排序的第一条。
+- 剧本里用了没有对应文件的情绪，会在控制台提示，并改用主参考。
+
+```
+先生、新しいお仕事です。{开心}わーい！ありがとうございます！{main}では、始めましょう。
+```
 
 ## 放模型
 
@@ -58,7 +76,7 @@ gpt_sovits_pretrained:
 
 - `chinese-hubert-base`（约 190MB，HuggingFace `lj1995/GPT-SoVITS`）。网络不通时按报错提示手动下载。
 - 日语用户词典 `ja_userdic/userdict.csv`（17MB，GitHub）。下载失败不影响使用，只是日文里的英文单词会按字母读。
-- 中文：`chinese-roberta-wwm-ext-large`（约 650MB，HuggingFace）和多音字模型 `G2PWModel`（约 600MB，ModelScope）。G2PWModel 下载失败、或没装 `opencc` / `onnxruntime` 时，多音字改用 pypinyin 判断，能用但准确率明显下降（测试的 70 句里有 11 句读音和官方不同）。
+- 中文：`chinese-roberta-wwm-ext-large`（约 650MB，HuggingFace）和多音字模型 `G2PWModel`（约 600MB，ModelScope）。G2PWModel 下载失败、或没装 `opencc` / `onnxruntime` 时，多音字改用 pypinyin 判断，能用但准确率明显下降（测试的 50 句里有 11 句读音和官方不同）。
 
 ## 依赖
 

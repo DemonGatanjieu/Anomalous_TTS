@@ -38,6 +38,17 @@ class Resources(Protocol):
 
 
 @dataclass
+class Segment:
+    """Consecutive sentences that share one reference audio."""
+
+    ref_wav: str
+    ref_text: str
+    ref_lang: str
+    sentences: List[str]
+    label: str = "main"
+
+
+@dataclass
 class SynthesisParams:
     top_k: int = 15
     top_p: float = 1.0
@@ -263,71 +274,72 @@ class Engine:
         self,
         gpt_path: str,
         sovits_path: str,
-        ref_wav: str,
-        ref_text: str,
-        ref_lang: str,
-        sentences: List[str],
+        segments: List[Segment],
         text_lang: str,
         params: SynthesisParams,
         progress: Optional[Callable[[int, int], None]] = None,
     ) -> Tuple[np.ndarray, int]:
-        """Synthesize already-split sentences with one reference. Returns (float32 mono, sr)."""
+        """Synthesize segments (each with its own reference) in order. Returns (float32 mono, sr)."""
         with self._lock:
             gpt = self.gpt(gpt_path)
             sovits = self.sovits(sovits_path)
-            prompt, phones1, bert1, refer = self._reference(
-                sovits_path, sovits, ref_wav, (ref_text or "").strip(), ref_lang
-            )
-            ref_free = prompt is None
             self._prepare_language(text_lang)
 
             gen = torch.Generator(device="cpu").manual_seed(int(params.seed) & 0xFFFFFFFF)
             pause = np.zeros(int(sovits.sampling_rate * params.pause_sec), dtype=np.float32)
             pieces: List[np.ndarray] = []
-            total = len(sentences)
-            for i, sentence in enumerate(sentences):
-                sentence = text_frontend.ensure_sentence_end(sentence, text_lang)
-                if not sentence.strip():
-                    continue
-                phones2, bert2 = text_frontend.get_phones_and_bert(sentence, text_lang, self._bert_feature)
-                if ref_free:
-                    bert = bert2
-                    all_ids = phones2
-                else:
-                    bert = torch.cat([bert1, bert2], 1)
-                    all_ids = phones1 + phones2
-                x = torch.LongTensor(all_ids).unsqueeze(0).to(self.device)
-                x_len = torch.tensor([x.shape[-1]], device=self.device)
-                bert = bert.unsqueeze(0).to(self.device, self.dtype)
-
-                # Sampling uses torch's global RNG; seed it per sentence for reproducibility.
-                torch.manual_seed(int(torch.randint(0, 2**31 - 1, (1,), generator=gen)))
-                pred, idx = gpt.model.infer_panel(
-                    x,
-                    x_len,
-                    prompt,
-                    bert,
-                    top_k=int(params.top_k),
-                    top_p=float(params.top_p),
-                    temperature=float(params.temperature),
-                    early_stop_num=HZ * gpt.max_sec,
-                    repetition_penalty=float(params.repetition_penalty),
+            total = sum(len(seg.sentences) for seg in segments)
+            done = 0
+            for seg in segments:
+                prompt, phones1, bert1, refer = self._reference(
+                    sovits_path, sovits, seg.ref_wav, (seg.ref_text or "").strip(), seg.ref_lang
                 )
-                pred = pred[:, -idx:].unsqueeze(0)
-                audio = sovits.model.decode(
-                    pred,
-                    torch.LongTensor(phones2).unsqueeze(0).to(self.device),
-                    [refer],
-                    speed=float(params.speed),
-                )[0][0]
-                audio = audio.float().cpu().numpy()
-                peak = np.abs(audio).max()
-                if peak > 1:
-                    audio = audio / peak
-                pieces.append(audio)
-                pieces.append(pause)
-                if progress:
-                    progress(i + 1, total)
+                for sentence in seg.sentences:
+                    done += 1
+                    sentence = text_frontend.ensure_sentence_end(sentence, text_lang)
+                    if sentence.strip():
+                        pieces.append(
+                            self._one_sentence(gpt, sovits, prompt, phones1, bert1, refer, sentence, text_lang, params, gen)
+                        )
+                        pieces.append(pause)
+                    if progress:
+                        progress(done, total)
             if not pieces:
                 raise ValueError("没有可合成的文本。")
             return np.concatenate(pieces).astype(np.float32), sovits.sampling_rate
+
+    def _one_sentence(self, gpt, sovits, prompt, phones1, bert1, refer, sentence, lang, params, gen) -> np.ndarray:
+        phones2, bert2 = text_frontend.get_phones_and_bert(sentence, lang, self._bert_feature)
+        if prompt is None:  # no reference text
+            bert = bert2
+            all_ids = phones2
+        else:
+            bert = torch.cat([bert1, bert2], 1)
+            all_ids = phones1 + phones2
+        x = torch.LongTensor(all_ids).unsqueeze(0).to(self.device)
+        x_len = torch.tensor([x.shape[-1]], device=self.device)
+        bert = bert.unsqueeze(0).to(self.device, self.dtype)
+
+        # Sampling uses torch's global RNG; seed it per sentence for reproducibility.
+        torch.manual_seed(int(torch.randint(0, 2**31 - 1, (1,), generator=gen)))
+        pred, idx = gpt.model.infer_panel(
+            x,
+            x_len,
+            prompt,
+            bert,
+            top_k=int(params.top_k),
+            top_p=float(params.top_p),
+            temperature=float(params.temperature),
+            early_stop_num=HZ * gpt.max_sec,
+            repetition_penalty=float(params.repetition_penalty),
+        )
+        pred = pred[:, -idx:].unsqueeze(0)
+        audio = sovits.model.decode(
+            pred,
+            torch.LongTensor(phones2).unsqueeze(0).to(self.device),
+            [refer],
+            speed=float(params.speed),
+        )[0][0]
+        audio = audio.float().cpu().numpy()
+        peak = np.abs(audio).max()
+        return audio / peak if peak > 1 else audio

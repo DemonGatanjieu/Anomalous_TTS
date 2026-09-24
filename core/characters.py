@@ -5,10 +5,16 @@ at least one GPT weight (.ckpt) and one SoVITS weight (.pth). If that folder has
 two or more subfolders that each hold weights (for example ``日配`` and
 ``中配``), each subfolder becomes its own character, named ``角色/子文件夹``.
 
+Emotion references follow the F5-TTS / Anomalous naming: ``名字.<情绪>.wav``
+(the emotion is everything after the first dot of the file name). A script
+line ``{开心}...`` uses the first such file whose emotion is ``开心``.
+
 Reference text is looked up, in order, from:
 1. a ``.txt`` next to the audio with the same name (F5-TTS convention);
 2. a GPT-SoVITS annotation file (``.list``, or ``.txt`` in the same
-   ``path|speaker|LANG|text`` format) anywhere in the character folder.
+   ``path|speaker|LANG|text`` format) anywhere in the character folder,
+   first by the file name, then by the name without the emotion part (so a
+   clip renamed to ``X.开心.wav`` still finds the line for ``X.wav``).
 """
 
 from __future__ import annotations
@@ -203,6 +209,26 @@ def _read_list(path: str) -> Dict[str, Tuple[str, str]]:
     return table
 
 
+MAIN = "main"
+
+
+def emotion_of(audio_rel: str) -> Optional[str]:
+    """``X.开心.wav`` -> ``开心``; ``X.wav`` -> None (same rule as Anomalous parse_voice_name)."""
+    stem = os.path.splitext(os.path.basename(audio_rel))[0]
+    _, sep, emotion = stem.partition(".")
+    return emotion.strip() if sep and emotion.strip() else None
+
+
+def emotions(c: Character) -> Dict[str, str]:
+    """Emotion -> audio path (relative). The first file in name order wins."""
+    out: Dict[str, str] = {}
+    for rel in sorted(c.audio):
+        emotion = emotion_of(rel)
+        if emotion and emotion != MAIN:
+            out.setdefault(emotion, rel)
+    return out
+
+
 def reference_text(c: Character, audio_rel: str) -> Tuple[str, Optional[str]]:
     """Return (text, LIST language code or None). Empty text if unknown."""
     stem = os.path.splitext(audio_rel)[0]
@@ -210,13 +236,17 @@ def reference_text(c: Character, audio_rel: str) -> Tuple[str, Optional[str]]:
     if sidecar in c.text_files:
         with open(c.abspath(sidecar), encoding="utf-8-sig") as f:
             return f.read().strip(), None
-    base = os.path.basename(audio_rel).lower()
-    for rel in c.text_files:
-        if os.path.splitext(rel)[0] == stem:
-            continue
-        hit = _read_list(c.abspath(rel)).get(base)
-        if hit:
-            return hit
+    name, ext = os.path.splitext(os.path.basename(audio_rel))
+    keys = [(name + ext).lower()]
+    if emotion_of(audio_rel):
+        keys.append((name.partition(".")[0] + ext).lower())
+    tables = [
+        _read_list(c.abspath(rel)) for rel in c.text_files if os.path.splitext(rel)[0] != stem
+    ]
+    for key in keys:
+        for table in tables:
+            if key in table:
+                return table[key]
     return "", None
 
 
@@ -232,7 +262,10 @@ def default_reference(c: Character) -> Tuple[str, str, Optional[str]]:
             return 0.0
 
     leaf = c.name.split("/")[0]
-    ordered = sorted(c.audio, key=lambda r: (os.path.splitext(os.path.basename(r))[0] != leaf, r))
+    ordered = sorted(
+        c.audio,
+        key=lambda r: (os.path.splitext(os.path.basename(r))[0] != leaf, emotion_of(r) is not None, r),
+    )
     fallback = None
     for rel in ordered:
         if not 3.0 <= seconds(rel) <= 10.0:
