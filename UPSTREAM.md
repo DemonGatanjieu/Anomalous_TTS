@@ -16,8 +16,10 @@
 | `module/models.py` 及 `commons` `modules` `attentions` `mrte_model` `quantize` `core_vq` `transforms` `mel_processing` | SoVITS：由语义 token 生成波形 |
 | `text/symbols.py`、`text/symbols2.py` | 音素表 |
 | `text/chinese2.py`、`tone_sandhi.py`、`opencpop-strict.txt`、`zh_normalization/`、`g2pw/`（含多音字词表） | 中文前端：文本规整、分词、变调、儿化、g2pW 多音字 |
+| `text/english.py`、`text/en_normalization/expend.py` | 英语前端（词典首次使用时从同一版本的 GitHub 下载，不放进仓库） |
+| `eres2net/`（4 个文件） | v2Pro / v2ProPlus 的说话人识别模型结构 |
 
-没有复制：训练代码、WebUI、`TTS_infer_pack`（官方推理主流程，由 `core/engine.py` 替代）、v3/v4 的 BigVGAN 和 CFM、UVR5、ASR、说话人识别（v2Pro 用，下一阶段加入）。
+没有复制：训练代码、WebUI、`TTS_infer_pack`（官方推理主流程，由 `core/engine.py` 替代）、v3/v4 的 BigVGAN 和 CFM、UVR5、ASR、`sv.py`（由 `core/engine.py` 的 `sv()` 替代）、`LangSegmenter`（中英混合改用正则切分）。
 
 ### 补丁（见 `tools/sync_upstream.py`）
 
@@ -33,6 +35,10 @@
    - `jieba_fast` 装不上时退回纯 Python 的 `jieba`（70 句测试结果一致）。
 7. `text/tone_sandhi.py`：同上，`jieba_fast` → `jieba` 兜底。
 8. `text/g2pw/onnx_api.py`：`requests`、`opencc` 改为用到时才导入。
+9. `text/english.py`：相对 import；词典路径由 `configure(词典目录, 缓存目录)` 指定；`en_G2p()` 改为首次使用时才创建（上游在导入时就加载词典）。
+10. `eres2net/ERes2NetV2.py`：相对 import。
+
+英语词典里有两个 pickle（`namedict_cache.pickle`，以及上游预生成的 `engdict_cache.pickle`）。本包只从固定版本的 GitHub 地址下载 `namedict_cache.pickle`；`engdict_cache.pickle` 在本地由 `cmudict.rep` 生成，除非目录里已经有（比如用户自己的 GPT-SoVITS 整合包）。
 
 `core/engine.py` 的推理流程照 `inference_webui.py` 的 `get_tts_wav` 重写，保留了上游的行为细节：参考音频限 3~10 秒、参考音频后补 0.3 秒静音、短句前补 "."、句末补标点、每句单独解码后按峰值归一化。
 
@@ -44,6 +50,14 @@
 
 为什么中文没用 Genie 的前端：Genie 用 g2pM 判断多音字，其中前 50 句里有 16 句和官方不同，而且多是明显读错（"都市"读 dou、"还你"读 hai、"便宜"读 bian、"很长"读 zhang、"一只猫"读 zhi3）。同样 50 句，不用模型的 pypinyin 也只有 11 句不同。模型是用官方 g2pW 前端训练的，所以中文照搬官方。
 g2pW 需要 `opencc`（先把简体转成繁体再判断）。试过用 `zh_normalization/char_convert.py` 的逐字转换代替，会把"了"转成"瞭"读成 liao，不可用。
+
+### 英语对拍结果（2026-09-24）
+
+16 句测试句（多音词、数字、日期、金额、缩写、专有名词），本包与 GPT-SoVITS 官方 `english.py` 音素完全一致。
+
+### v2Pro / v2ProPlus
+
+用官方底模 `s2Gv2Pro.pth`、`s2Gv2ProPlus.pth` 测试：权重全部加载（除训练用的 `enc_q`），说话人向量按 `sv.py` 的 `compute_embedding3` 计算，能正常生成。
 
 ## Genie-TTS（`vendor/genie/`）
 

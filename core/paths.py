@@ -107,6 +107,71 @@ def roberta_dir() -> str:
     return _hf_pretrained(ROBERTA_NAME, ROBERTA_FILES)
 
 
+SV_FILE = "pretrained_eres2netv2w24s4ep4.ckpt"
+
+
+def sv_path() -> str:
+    """Speaker encoder for v2Pro / v2ProPlus (~100MB), downloaded on first use."""
+    return os.path.join(_hf_pretrained("sv", (SV_FILE,)), SV_FILE)
+
+
+EN_DICT_FILES = ("cmudict.rep", "cmudict-fast.rep", "engdict-hot.rep", "namedict_cache.pickle")
+EN_DICT_URL = f"https://raw.githubusercontent.com/RVC-Boss/GPT-SoVITS/{GSV_COMMIT}/GPT_SoVITS/text/{{name}}"
+# nltk_data packages g2p_en / GPT-SoVITS english.py need.
+NLTK_PACKAGES = (
+    "taggers/averaged_perceptron_tagger_eng",
+    "taggers/averaged_perceptron_tagger",
+    "corpora/cmudict",
+)
+NLTK_URL = "https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/{name}.zip"
+
+
+def _download(url: str, dest: str) -> None:
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    tmp = dest + ".part"
+    urllib.request.urlretrieve(url, tmp)
+    os.replace(tmp, dest)
+
+
+def english_dirs():
+    """English G2P data: (dictionary dir, writable cache dir, nltk data dir). Downloads on first use.
+
+    nltk_data is fetched directly instead of with nltk.download(): recent NLTK refuses
+    downloads through an HTTP proxy, which is common on users' machines.
+    """
+    with _lock:
+        pretrained = os.path.join(default_root(), "pretrained")
+        dict_dir = None
+        for root in folder_paths.get_folder_paths(CATEGORY):
+            for cand in (os.path.join(root, "pretrained", "en_dict"), os.path.join(root, "en_dict"), root):
+                if all(os.path.isfile(os.path.join(cand, f)) for f in EN_DICT_FILES):
+                    dict_dir = cand
+                    break
+            if dict_dir:
+                break
+        if dict_dir is None:
+            dict_dir = os.path.join(pretrained, "en_dict")
+            log.info("[Anomalous_TTS] 下载英语词典到 %s ...", dict_dir)
+            for name in EN_DICT_FILES:
+                if not os.path.isfile(os.path.join(dict_dir, name)):
+                    _download(EN_DICT_URL.format(name=name), os.path.join(dict_dir, name))
+        cache_dir = os.path.join(pretrained, "en_dict")
+        os.makedirs(cache_dir, exist_ok=True)
+
+        nltk_dir = os.path.join(pretrained, "nltk_data")
+        for name in NLTK_PACKAGES:
+            target = os.path.join(nltk_dir, *name.split("/"))
+            if os.path.isdir(target) or os.path.isfile(target + ".zip"):
+                continue
+            import zipfile
+
+            log.info("[Anomalous_TTS] 下载 nltk 数据 %s ...", name)
+            _download(NLTK_URL.format(name=name), target + ".zip")
+            with zipfile.ZipFile(target + ".zip") as zf:
+                zf.extractall(os.path.dirname(target))
+        return dict_dir, cache_dir, nltk_dir
+
+
 _g2pw_state = {"tried": False}
 
 
@@ -148,6 +213,8 @@ class ComfyResources:
     hubert_dir = staticmethod(hubert_dir)
     roberta_dir = staticmethod(roberta_dir)
     g2pw_dir = staticmethod(g2pw_dir)
+    sv_path = staticmethod(sv_path)
+    english_dirs = staticmethod(english_dirs)
 
 
 _ja_userdict_state = {"done": False}

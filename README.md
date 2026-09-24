@@ -9,8 +9,8 @@
 ## 目前能做什么
 
 - 节点 **角色语音 (GPT-SoVITS)**（`AnomalousTTS_CharacterSpeech`），输出 ComfyUI 的 `AUDIO`，可接 Save Audio / Preview Audio。
-- 模型版本：v1、v2。v2Pro / v2ProPlus 下一步加入；v3 / v4 不支持。
-- 语言：日语、中文。英语下一步加入。中文里的英文字母目前会被忽略，日文里的英文单词按片假名读。
+- 模型版本：v1、v2、v2Pro、v2ProPlus。v3 / v4 不支持。
+- 语言：日语、中文、英语。中文里夹的英文单词按英语读（和官方一样）；日文里的英文单词按片假名读（官方的 all_ja 模式）。
 - 可调：top_k、top_p、temperature、repetition_penalty、语速、句间停顿、随机种子（同一种子可复现同样的结果）。
 - 参考台词自动读取：同名 `.txt`，或 GPT-SoVITS 训练用的标注文件（`.list`，或同格式的 `.txt`，每行 `音频路径|角色|JA|台词`）。
 - 没有台词时自动改用无参考文本模式。
@@ -76,11 +76,13 @@ gpt_sovits_pretrained:
 
 - `chinese-hubert-base`（约 190MB，HuggingFace `lj1995/GPT-SoVITS`）。网络不通时按报错提示手动下载。
 - 日语用户词典 `ja_userdic/userdict.csv`（17MB，GitHub）。下载失败不影响使用，只是日文里的英文单词会按字母读。
+- v2Pro / v2ProPlus：说话人识别模型 `sv/pretrained_eres2netv2w24s4ep4.ckpt`（约 100MB，HuggingFace）。
+- 英语：GPT-SoVITS 的英语词典（约 8MB，GitHub）和 nltk 词性标注数据（约 20MB，GitHub）。nltk 数据由本节点直接下载，不走 `nltk.download()`（新版 nltk 在有代理时会拒绝下载）。
 - 中文：`chinese-roberta-wwm-ext-large`（约 650MB，HuggingFace）和多音字模型 `G2PWModel`（约 600MB，ModelScope）。G2PWModel 下载失败、或没装 `opencc` / `onnxruntime` 时，多音字改用 pypinyin 判断，能用但准确率明显下降（测试的 50 句里有 11 句读音和官方不同）。
 
 ## 依赖
 
-`requirements.txt` 里的包大多是 ComfyUI 自带或常见的。日语需要 `pyopenjtalk-plus`。
+`requirements.txt` 里的包大多是 ComfyUI 自带或常见的。日语需要 `pyopenjtalk-plus`，中文需要 `pypinyin`、`jieba`、`opencc`，英语需要 `g2p_en`、`wordsegment`、`nltk`。只用到的语言才会加载对应的包。
 
 ## 许可证
 

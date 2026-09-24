@@ -11,6 +11,10 @@ pyopenjtalk-plus
 pypinyin
 jieba
 opencc
+# English
+g2p_en
+wordsegment
+nltk
 # Chinese polyphones (g2pW) also need onnxruntime or onnxruntime-gpu.
 # Not listed on purpose: installing onnxruntime next to onnxruntime-gpu breaks
 # other nodes. Without it, polyphones fall back to pypinyin.

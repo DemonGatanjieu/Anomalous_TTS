@@ -36,6 +36,11 @@ class Resources(Protocol):
 
     def g2pw_dir(self) -> Optional[str]: ...
 
+    def sv_path(self) -> str: ...
+
+    def english_dirs(self) -> Tuple[str, str, str]:
+        """(dictionary dir, writable cache dir, nltk data dir)"""
+
 
 @dataclass
 class Segment:
@@ -107,8 +112,7 @@ class SoVITSModel:
         from ..vendor.gpt_sovits.module.models import SynthesizerTrn
 
         data, version = load_sovits_checkpoint(path)
-        if version in ("v2Pro", "v2ProPlus"):
-            raise NotImplementedError(f"{os.path.basename(path)} 是 {version} 模型，下一阶段支持。")
+        self.is_v2pro = version in ("v2Pro", "v2ProPlus")
         hps = data["config"]
         hps["model"]["semantic_frame_rate"] = "25hz"
         hps["model"]["version"] = version
@@ -126,7 +130,9 @@ class SoVITSModel:
         )
         if hasattr(model, "enc_q"):
             del model.enc_q  # posterior encoder: training only
-        model.load_state_dict(data["weight"], strict=False)
+        result = model.load_state_dict(data["weight"], strict=False)
+        if result.missing_keys:
+            log.warning("[Anomalous_TTS] %s 缺少 %d 个权重：%s", os.path.basename(path), len(result.missing_keys), result.missing_keys[:5])
         self.model = model.to(device=device, dtype=dtype).eval()
 
 
@@ -139,7 +145,10 @@ class Engine:
         self.resources = resources
         self._hubert = None
         self._roberta = None
+        self._sv = None
         self._zh_ready = False
+        self._en_ready = False
+        self._warned = {}
         self._gpt = _LRU(2)
         self._sovits = _LRU(2)
         self._refs = _LRU(16)
@@ -174,9 +183,51 @@ class Engine:
         feats = [res[i].repeat(word2ph[i], 1) for i in range(len(word2ph))]
         return torch.cat(feats, dim=0).T
 
-    def _prepare_language(self, lang: str) -> None:
-        """Chinese: use g2pW for polyphones when available, like GPT-SoVITS does."""
-        if lang != "zh" or self._zh_ready:
+    # text_frontend.Context
+    def bert(self, norm_text: str, word2ph: List[int]) -> torch.Tensor:
+        return self._bert_feature(norm_text, word2ph)
+
+    def prepare(self, lang: str) -> None:
+        if lang == "zh":
+            self._prepare_chinese()
+        elif lang == "en":
+            self._prepare_english()
+
+    def can_use(self, lang: str) -> bool:
+        """For mixed text: False if the language's packages or data are missing."""
+        try:
+            self.prepare(lang)
+            return True
+        except Exception as e:
+            if not self._warned.get(lang):
+                self._warned[lang] = True
+                log.warning("[Anomalous_TTS] %s，文字里的这部分会按主语言处理。", e)
+            return False
+
+    def _prepare_english(self) -> None:
+        if self._en_ready:
+            return
+        import importlib.util
+
+        missing = [m for m in ("g2p_en", "wordsegment", "nltk") if importlib.util.find_spec(m) is None]
+        if missing:
+            raise RuntimeError(
+                f"英语需要安装 {'、'.join(missing)}（ComfyUI 便携版：python_embeded\\python.exe -m pip install "
+                f"{' '.join(missing)}）"
+            )
+        dict_dir, cache_dir, nltk_dir = self.resources.english_dirs()
+        import nltk
+
+        if nltk_dir not in nltk.data.path:
+            nltk.data.path.insert(0, nltk_dir)
+        from ..vendor.gpt_sovits.text import english
+
+        english.configure(dict_dir, cache_dir)
+        self._en_ready = True
+
+    def _prepare_chinese(self) -> None:
+        """Use g2pW for polyphones when available, like GPT-SoVITS does."""
+        if self._zh_ready:
             return
         self._zh_ready = True
         from ..vendor.gpt_sovits.text import chinese2
@@ -209,6 +260,7 @@ class Engine:
         with self._lock:
             self._hubert = None
             self._roberta = None
+            self._sv = None
             self._gpt.clear()
             self._sovits.clear()
             self._refs.clear()
@@ -229,14 +281,35 @@ class Engine:
         codes = sovits.model.extract_latent(ssl)
         return codes[0, 0].unsqueeze(0)
 
-    def _refer_spec(self, sovits: SoVITSModel, wav_path: str) -> torch.Tensor:
+    def sv(self):
+        """ERes2NetV2 speaker encoder for v2Pro / v2ProPlus (GPT-SoVITS ``sv.py``)."""
+        if self._sv is None:
+            from ..vendor.gpt_sovits.eres2net.ERes2NetV2 import ERes2NetV2
+
+            state = torch.load(self.resources.sv_path(), map_location="cpu", weights_only=True)
+            model = ERes2NetV2(baseWidth=24, scale=4, expansion=4)
+            model.load_state_dict(state)
+            self._sv = model.to(device=self.device, dtype=self.dtype).eval()
+        return self._sv
+
+    def _sv_embedding(self, audio16k: torch.Tensor) -> torch.Tensor:
+        from ..vendor.gpt_sovits.eres2net import kaldi
+
+        wav = audio16k.to(self.device, self.dtype)
+        feat = torch.stack(
+            [kaldi.fbank(w.unsqueeze(0), num_mel_bins=80, sample_frequency=16000, dither=0) for w in wav]
+        )
+        return self.sv().forward3(feat)
+
+    def _refer_spec(self, sovits: SoVITSModel, wav_path: str) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """GPT-SoVITS ``get_spepc``: spectrogram at the model rate, plus the v2Pro speaker embedding."""
+        import torchaudio.functional as AF
+
         from ..vendor.gpt_sovits.module.mel_processing import spectrogram_torch
 
         wav, sr = load_mono(wav_path)
         audio = torch.from_numpy(wav).unsqueeze(0).float()
         if sr != sovits.sampling_rate:
-            import torchaudio.functional as AF
-
             audio = AF.resample(audio, sr, sovits.sampling_rate)
         maxx = audio.abs().max()
         if maxx > 1:
@@ -249,7 +322,10 @@ class Engine:
             sovits.win_length,
             center=False,
         )
-        return spec.to(self.dtype)
+        sv_emb = None
+        if sovits.is_v2pro:
+            sv_emb = self._sv_embedding(AF.resample(audio, sovits.sampling_rate, 16000))
+        return spec.to(self.dtype), sv_emb
 
     def _reference(self, sovits_path: str, sovits: SoVITSModel, wav_path: str, text: str, lang: str):
         key = (sovits_path, wav_path, os.path.getmtime(wav_path), text, lang)
@@ -260,11 +336,11 @@ class Engine:
             bert = None
             if text:
                 prompt = self._prompt_semantic(sovits, wav_path)
-                self._prepare_language(lang)
                 phones, bert = text_frontend.get_phones_and_bert(
-                    text_frontend.ensure_sentence_end(text, lang), lang, self._bert_feature
+                    text_frontend.ensure_sentence_end(text, lang), lang, self
                 )
-            return prompt, phones, bert, self._refer_spec(sovits, wav_path)
+            refer, sv_emb = self._refer_spec(sovits, wav_path)
+            return prompt, phones, bert, refer, sv_emb
 
         return self._refs.get_or_create(key, build)
 
@@ -283,7 +359,6 @@ class Engine:
         with self._lock:
             gpt = self.gpt(gpt_path)
             sovits = self.sovits(sovits_path)
-            self._prepare_language(text_lang)
 
             gen = torch.Generator(device="cpu").manual_seed(int(params.seed) & 0xFFFFFFFF)
             pause = np.zeros(int(sovits.sampling_rate * params.pause_sec), dtype=np.float32)
@@ -291,7 +366,7 @@ class Engine:
             total = sum(len(seg.sentences) for seg in segments)
             done = 0
             for seg in segments:
-                prompt, phones1, bert1, refer = self._reference(
+                prompt, phones1, bert1, refer, sv_emb = self._reference(
                     sovits_path, sovits, seg.ref_wav, (seg.ref_text or "").strip(), seg.ref_lang
                 )
                 for sentence in seg.sentences:
@@ -299,7 +374,9 @@ class Engine:
                     sentence = text_frontend.ensure_sentence_end(sentence, text_lang)
                     if sentence.strip():
                         pieces.append(
-                            self._one_sentence(gpt, sovits, prompt, phones1, bert1, refer, sentence, text_lang, params, gen)
+                            self._one_sentence(
+                                gpt, sovits, prompt, phones1, bert1, refer, sv_emb, sentence, text_lang, params, gen
+                            )
                         )
                         pieces.append(pause)
                     if progress:
@@ -308,8 +385,10 @@ class Engine:
                 raise ValueError("没有可合成的文本。")
             return np.concatenate(pieces).astype(np.float32), sovits.sampling_rate
 
-    def _one_sentence(self, gpt, sovits, prompt, phones1, bert1, refer, sentence, lang, params, gen) -> np.ndarray:
-        phones2, bert2 = text_frontend.get_phones_and_bert(sentence, lang, self._bert_feature)
+    def _one_sentence(
+        self, gpt, sovits, prompt, phones1, bert1, refer, sv_emb, sentence, lang, params, gen
+    ) -> np.ndarray:
+        phones2, bert2 = text_frontend.get_phones_and_bert(sentence, lang, self)
         if prompt is None:  # no reference text
             bert = bert2
             all_ids = phones2
@@ -339,6 +418,7 @@ class Engine:
             torch.LongTensor(phones2).unsqueeze(0).to(self.device),
             [refer],
             speed=float(params.speed),
+            sv_emb=[sv_emb] if sovits.is_v2pro else None,
         )[0][0]
         audio = audio.float().cpu().numpy()
         peak = np.abs(audio).max()

@@ -29,6 +29,10 @@ FILES = [
     "text/g2pw/__init__.py", "text/g2pw/g2pw.py", "text/g2pw/onnx_api.py", "text/g2pw/dataset.py",
     "text/g2pw/utils.py", "text/g2pw/polyphonic.pickle", "text/g2pw/polyphonic.rep",
     "text/g2pw/polyphonic-fix.rep", "text/g2pw/polyphonic.md5",
+    # English front end (dictionaries are downloaded at run time, see core/paths.py)
+    "text/english.py", "text/en_normalization/expend.py",
+    # v2Pro / v2ProPlus speaker embedding
+    "eres2net/ERes2NetV2.py", "eres2net/fusion.py", "eres2net/kaldi.py", "eres2net/pooling_layers.py",
 ]
 for f in FILES:
     (ROOT / f).parent.mkdir(parents=True, exist_ok=True)
@@ -122,6 +126,32 @@ p("text/g2pw/__init__.py", "from text.g2pw.g2pw import *", "from .g2pw import *"
 p("text/g2pw/onnx_api.py", "import requests\nfrom opencc import OpenCC\n", "")
 p("text/g2pw/onnx_api.py", "        with requests.get(modelscope_url, stream=True) as r:", "        import requests\n\n        with requests.get(modelscope_url, stream=True) as r:")
 p("text/g2pw/onnx_api.py", '            self.cc = OpenCC("s2tw")', '            from opencc import OpenCC\n\n            self.cc = OpenCC("s2tw")')
+
+# --- English front end ---
+p("text/english.py", "from text.symbols import punctuation\n", "from .symbols import punctuation\n")
+p("text/english.py", "from text.symbols2 import symbols\n", "from .symbols2 import symbols\n")
+p("text/english.py", "from text.en_normalization.expend import normalize\n", "from .en_normalization.expend import normalize\n")
+p("text/english.py", "current_file_path = os.path.dirname(__file__)\n",
+  "# Anomalous_TTS: dictionaries live outside the package; configure() points here before first use.\n"
+  "current_file_path = os.path.dirname(__file__)\n")
+p("text/english.py", "_g2p = en_G2p()\n\n\ndef g2p(text):\n",
+  "_g2p = None  # Anomalous_TTS: built on first use, after configure()\n\n\n"
+  "def configure(dict_dir, cache_dir):\n"
+  "    global CMU_DICT_PATH, CMU_DICT_FAST_PATH, CMU_DICT_HOT_PATH, CACHE_PATH, NAMECACHE_PATH\n"
+  "    CMU_DICT_PATH = os.path.join(dict_dir, \"cmudict.rep\")\n"
+  "    CMU_DICT_FAST_PATH = os.path.join(dict_dir, \"cmudict-fast.rep\")\n"
+  "    CMU_DICT_HOT_PATH = os.path.join(dict_dir, \"engdict-hot.rep\")\n"
+  "    NAMECACHE_PATH = os.path.join(dict_dir, \"namedict_cache.pickle\")\n"
+  "    cached = os.path.join(dict_dir, \"engdict_cache.pickle\")\n"
+  "    CACHE_PATH = cached if os.path.exists(cached) else os.path.join(cache_dir, \"engdict_cache.pickle\")\n\n\n"
+  "def g2p(text):\n"
+  "    global _g2p\n"
+  "    if _g2p is None:\n"
+  "        _g2p = en_G2p()\n")
+
+# --- speaker verification (v2Pro) ---
+p("eres2net/ERes2NetV2.py", "import pooling_layers as pooling_layers\nfrom fusion import AFF\n",
+  "from . import pooling_layers as pooling_layers\nfrom .fusion import AFF\n")
 
 bad = 0
 for f, old, new in P:

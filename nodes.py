@@ -33,8 +33,29 @@ def get_engine() -> Engine:
     return _engine
 
 
+def _hook_unload_all_models():
+    """Let ComfyUI's "Unload models" / "Free model and node cache" also free our models.
+
+    Our models are not ComfyUI ModelPatchers, so ComfyUI does not track them. Wrap
+    ``unload_all_models`` (called by the /free endpoint) to drop them as well.
+    """
+    original = mm.unload_all_models
+    if getattr(original, "_anomalous_tts", False):
+        return
+
+    def unload_all_models(*args, **kwargs):
+        if _engine is not None:
+            _engine.unload()
+        return original(*args, **kwargs)
+
+    unload_all_models._anomalous_tts = True
+    mm.unload_all_models = unload_all_models
+
+
+_hook_unload_all_models()
+
 LANG_NAMES = list(text_frontend.LANGUAGES.keys())
-IMPLEMENTED_LANGS = ["日语", "中文"]  # 英语 is next; keep the list honest.
+IMPLEMENTED_LANGS = ["日语", "中文", "英语"]
 
 
 def _none_placeholder(values):
