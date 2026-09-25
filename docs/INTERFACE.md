@@ -1,6 +1,6 @@
 # Anomalous_TTS ↔ Anomalous Model Browser 接口约定
 
-版本：2（2026-09-25）
+版本：3（2026-09-25）
 
 两个项目在不同的对话里开发。这份文档是双方唯一的约定：**Anomalous 只依赖这里写的东西**，其余都是 Anomalous_TTS 的内部实现，可以随时改。
 
@@ -29,7 +29,7 @@ Anomalous 推送剧本时只需要设置两个输入：
 
 ## 2. 角色
 
-一个角色 = 一个文件夹，放在 ComfyUI 模型分类 `gpt_sovits` 的某个根目录下（默认 `ComfyUI/models/gpt_sovits/`，可以用 `extra_model_paths.yaml` 增加）。
+一个角色 = 一个文件夹，放在某个**角色库**里。角色库就是 ComfyUI 模型分类 `gpt_sovits` 的根目录：默认 `ComfyUI/models/gpt_sovits/`，`extra_model_paths.yaml` 里写的，以及在界面里添加的（`POST /anomalous_tts/libraries`，不用重启）。
 
 - 根目录下的每个子文件夹是一个角色；文件夹里（含子文件夹）至少要有一个 `.ckpt`（GPT 权重）和一个 `.pth`（SoVITS 权重）。
 - 如果这个子文件夹下面有 2 个及以上各自带权重的子文件夹（比如日配、中配），每个子文件夹单独算一个角色，名字是 `角色/子文件夹`。
@@ -92,9 +92,15 @@ Anomalous 推送剧本时只需要设置两个输入：
 
 ## 5. HTTP 接口
 
-都挂在 ComfyUI 服务器上（默认 `http://127.0.0.1:8188`）。
+都挂在 ComfyUI 服务器上（默认 `http://127.0.0.1:8188`）。所有 JSON 响应都带 `"format": 3`。
 
-### `GET /anomalous_tts/characters`
+标了 🔒 的接口会读写服务器上的文件，只接受本机的请求（`127.0.0.1` / `::1`），其他电脑访问返回 403。`status.local` 告诉界面当前是不是本机。
+
+旧版节点没有 `/anomalous_tts/status`（404），界面据此隐藏第 5.2 节的功能。
+
+### 5.1 角色
+
+#### `GET /anomalous_tts/characters`
 
 所有角色的摘要。服务器会缓存扫描结果 30 秒；加 `?refresh=1` 强制重新扫描（给“刷新”按钮用）。
 
@@ -123,15 +129,15 @@ Anomalous 推送剧本时只需要设置两个输入：
 - 摘要里**没有**文件列表（一个角色可能有上千个音频）。要文件列表时取单个角色的详情。
 - 读取失败的角色只有 `name` 和 `error`。
 
-### `GET /anomalous_tts/characters?name=<角色名>`
+#### `GET /anomalous_tts/characters?name=<角色名>`
 
 单个角色的详情：`{"format": 2, "character": {…摘要字段…, "gpt": [...], "sovits": [...], "audio": [...]}}`。`gpt` / `sovits` / `audio` 是角色文件夹里的全部相对路径。找不到返回 404。
 
-### `GET /anomalous_tts/audio?character=<name>&path=<相对路径>`
+#### `GET /anomalous_tts/audio?character=<name>&path=<相对路径>`
 
 返回角色文件夹里的一个音频文件（用于试听）。只允许 `audio` 列表里的文件。
 
-### `POST /anomalous_tts/settings`
+#### 🔒 `POST /anomalous_tts/settings`
 
 写入角色设置文件。
 
@@ -143,9 +149,68 @@ Anomalous 推送剧本时只需要设置两个输入：
 - 服务器会校验：`gpt` / `sovits` / 各 `audio` 必须是这个角色文件夹里存在的文件；不合格返回 400 和原因。
 - 成功返回 `{"ok": true, "character": {…同单个角色详情…}}`。
 
+### 5.2 准备状态（角色库、底模、依赖）
+
+在界面里添加的角色库和底模来源记在 `ComfyUI/user/anomalous_tts.json`（节点自己管理，Anomalous 不直接读写）。
+
+#### `GET /anomalous_tts/status`
+
+```json
+{
+  "format": 3,
+  "local": true,
+  "libraries": [
+    { "path": "…/ComfyUI/models/gpt_sovits", "source": "default", "exists": true, "writable": true, "characters": 0 },
+    { "path": "D:/voices/模型", "source": "app", "exists": true, "writable": true, "characters": 29 }
+  ],
+  "pretrained": [
+    { "id": "hubert", "label": "chinese-hubert-base", "needed_for": "all", "size": 190000000, "required": true, "state": "ok", "path": "…" },
+    { "id": "g2pw", "label": "G2PWModel", "needed_for": "zh", "size": 610000000, "required": false, "state": "downloading", "done": 123000000 }
+  ],
+  "pretrained_sources": ["D:/GPT-SoVITS/GPT_SoVITS"],
+  "dependencies": {
+    "ja": { "ok": true, "missing": [] },
+    "zh": { "ok": false, "missing": ["opencc"], "command": "\"…/python.exe\" -m pip install opencc" }
+  }
+}
+```
+
+- 路径一律用 `/` 分隔。
+- `libraries[].source`：`default`（`models/gpt_sovits`）、`yaml`（`extra_model_paths.yaml`）、`app`（在界面里添加的，只有这种能移除）。`characters` 是这个角色库里的角色数。
+- `pretrained[].id`：`hubert`、`roberta`、`g2pw`、`sv`、`english`、`ja_userdic`。`needed_for`：`all` / `zh` / `en` / `ja` / `v2pro`。`required: false` 表示缺了也能用，只是效果差一点（g2pw 缺失时多音字改用 pypinyin；日语用户词典缺失时英文单词按字母读）。
+- `pretrained[].state`：`ok`（带 `path`）、`missing`、`queued`、`downloading`（带 `done`，已写入的字节数；`size` 是大约的总大小）、`error`（带 `error`）。
+- `dependencies` 只报告缺哪些包，`command` 是给运行 ComfyUI 的那个 Python 安装它们的命令。节点不替用户安装。
+- 每次实时计算；下载中可以每秒查一次。
+
+#### 🔒 `POST /anomalous_tts/libraries`
+
+`{ "path": "D:/voices/模型" }` 添加，`{ "path": "…", "remove": true }` 移除（只能移除 `app` 来源的）。文件夹必须存在，不能重复添加。**不复制、不移动任何文件。**成功返回新的 `status`（角色列表同时重新扫描）；不合格返回 400 和原因。
+
+#### 🔒 `POST /anomalous_tts/pretrained/source`
+
+`{ "path": "D:/GPT-SoVITS/GPT_SoVITS" }`：把一个 GPT-SoVITS 整合包当作底模来源（会在它自己、`pretrained_models`、`text` 里找）。一个底模都找不到返回 400。`"remove": true` 移除。成功返回新的 `status`。
+
+#### 🔒 `POST /anomalous_tts/pretrained/download`
+
+`{ "ids": ["roberta", "g2pw"] }`，不写 `ids` = 下载所有缺的。立即返回 `{"ok": true}`，在后台逐个下载，进度看 `status`。已有的、正在下载的会跳过。只有用户点了按钮才调用。
+
+#### 🔒 `GET /anomalous_tts/browse?path=<文件夹>`
+
+服务器端的文件夹浏览（浏览器拿不到本机路径），给“选择文件夹 / 文件”用。
+
+```json
+{ "path": "D:/GPT-SoVITS", "parent": "D:/", "dirs": ["GPT_weights_v2", "SoVITS_weights_v2"],
+  "files": [{ "name": "xxx-e15.ckpt", "kind": "gpt", "size": 155000000 }], "truncated": false }
+```
+
+- 不写 `path`：`dirs` 是所有磁盘（Windows）或 `/`，`parent` 为 `null`。`parent` 为 `""` 表示上一级就是磁盘列表。
+- `files` 只列导入能用的：`gpt`（.ckpt）、`sovits`（.pth）、`audio`（.wav/.flac/.ogg/.mp3）、`text`（.txt/.list）。隐藏文件夹不列，不进入符号链接。
+- 文件夹不存在或没有权限返回 400。
+
 ---
 
 ## 变更记录
 
 - 1（2026-09-24）：初版。
 - 2（2026-09-25）：`/anomalous_tts/characters` 列表只返回摘要（去掉 `gpt` / `sovits` / `audio`，加 `counts`），文件列表改由 `?name=` 取单个角色；加 `?refresh=1`；`format` 改为 2。文件名里只是扩展名的部分（`X.ogg.wav`）不再当作情绪。节点的 `reference_audio` 改为文本框（相对路径）。
+- 3（2026-09-25）：加第 5.2 节（`status`、`libraries`、`pretrained/source`、`pretrained/download`、`browse`）；角色库可以在界面里添加；`POST /settings` 只接受本机请求；`format` 改为 3。

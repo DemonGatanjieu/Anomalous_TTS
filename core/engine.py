@@ -21,7 +21,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 import numpy as np
 import torch
 
-from . import t2s_batch, text_frontend
+from . import dependencies, t2s_batch, text_frontend
 from .audio import load_mono, resample, silence
 from .models import LRU, GPTModel, Resources, SoVITSModel, file_key
 from .planner import Gap, Line, Plan, Voice
@@ -166,12 +166,9 @@ class Engine:
     def _prepare_english(self) -> None:
         if self._en_ready:
             return
-        missing = [m for m in ("g2p_en", "wordsegment", "nltk") if importlib.util.find_spec(m) is None]
+        missing = dependencies.missing("en")
         if missing:
-            raise RuntimeError(
-                f"英语需要安装 {'、'.join(missing)}（ComfyUI 便携版：python_embeded\\python.exe -m pip install "
-                f"{' '.join(missing)}）"
-            )
+            raise RuntimeError(f"英语需要安装 {'、'.join(missing)}：{dependencies.install_command(missing)}")
         dict_dir, cache_dir, nltk_dir = self.resources.english_dirs()
         import nltk
 

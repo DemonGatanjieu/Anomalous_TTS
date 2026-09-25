@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from aiohttp import web
 
-from .core import characters, settings
+from .core import browse, characters, dependencies, downloads, paths, settings
 
 log = logging.getLogger("Anomalous_TTS")
-API_FORMAT = 2
+
+API_FORMAT = 3
+LOCAL_ADDRESSES = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 
 
 def _summary(c: characters.Character, detail: bool) -> Dict[str, Any]:
@@ -46,6 +48,83 @@ def _save_settings(body: Dict[str, Any]) -> Dict[str, Any]:
     return {"ok": True, "character": _summary(characters.scan()[name], detail=True)}
 
 
+def _status_payload(local: bool) -> Dict[str, Any]:
+    chars = list(characters.scan().values())
+    libraries = paths.libraries()
+    for lib in libraries:
+        lib["characters"] = sum(1 for c in chars if paths.is_inside(c.folder, lib["path"]))
+    pretrained = []
+    for item in paths.pretrained_status():
+        job = downloads.state(item["id"]) if item["state"] == "missing" else None
+        pretrained.append({**item, **job} if job else item)
+    deps = {}
+    for lang in dependencies.LANG_PACKAGES:
+        missing = dependencies.missing(lang)
+        deps[lang] = {"ok": not missing, "missing": missing}
+        if missing:
+            deps[lang]["command"] = dependencies.install_command(missing)
+    return {
+        "format": API_FORMAT,
+        "local": local,
+        "libraries": libraries,
+        "pretrained": pretrained,
+        "pretrained_sources": paths.pretrained_sources(),
+        "dependencies": deps,
+    }
+
+
+def _is_local(request: web.Request) -> bool:
+    return request.remote in LOCAL_ADDRESSES
+
+
+def _require_local(request: web.Request) -> None:
+    if not _is_local(request):
+        raise web.HTTPForbidden(text="只能在运行 ComfyUI 的这台电脑上操作。")
+
+
+async def _json_body(request: web.Request) -> Dict[str, Any]:
+    try:
+        body = await request.json()
+    except ValueError:
+        raise web.HTTPBadRequest(text="请求体不是 JSON")
+    if not isinstance(body, dict):
+        raise web.HTTPBadRequest(text="请求体必须是 JSON 对象")
+    return body
+
+
+async def _in_thread(fn: Callable, *args):
+    """Run disk work off the event loop; ValueError from core becomes 400 with its message."""
+    try:
+        return await asyncio.get_running_loop().run_in_executor(None, fn, *args)
+    except ValueError as e:
+        raise web.HTTPBadRequest(text=str(e))
+
+
+def _change_library(folder: str, remove: bool) -> None:
+    (paths.remove_library if remove else paths.add_library)(folder)
+    characters.invalidate()
+
+
+def _change_pretrained_source(folder: str, remove: bool) -> None:
+    (paths.remove_pretrained_source if remove else paths.add_pretrained_source)(folder)
+
+
+def _path_field(body: Dict[str, Any]) -> str:
+    folder = body.get("path")
+    if not isinstance(folder, str) or not folder.strip():
+        raise web.HTTPBadRequest(text="缺少 path")
+    return folder.strip()
+
+
+def _download_ids(body: Dict[str, Any]) -> List[str]:
+    ids = body.get("ids")
+    if ids is None:
+        return [p["id"] for p in paths.pretrained_status() if p["state"] == "missing"]
+    if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+        raise web.HTTPBadRequest(text="ids 必须是字符串列表")
+    return ids
+
+
 def register(prompt_server) -> None:
     routes = prompt_server.routes
 
@@ -68,9 +147,38 @@ def register(prompt_server) -> None:
 
     @routes.post("/anomalous_tts/settings")
     async def post_settings(request):
-        try:
-            body = await request.json()
-        except ValueError:
-            raise web.HTTPBadRequest(text="请求体不是 JSON")
+        _require_local(request)
+        body = await _json_body(request)
         result = await asyncio.get_running_loop().run_in_executor(None, _save_settings, body)
         return web.json_response(result)
+
+    @routes.get("/anomalous_tts/status")
+    async def get_status(request):
+        return web.json_response(await _in_thread(_status_payload, _is_local(request)))
+
+    @routes.post("/anomalous_tts/libraries")
+    async def post_libraries(request):
+        _require_local(request)
+        body = await _json_body(request)
+        await _in_thread(_change_library, _path_field(body), bool(body.get("remove")))
+        return web.json_response(await _in_thread(_status_payload, True))
+
+    @routes.post("/anomalous_tts/pretrained/source")
+    async def post_pretrained_source(request):
+        _require_local(request)
+        body = await _json_body(request)
+        await _in_thread(_change_pretrained_source, _path_field(body), bool(body.get("remove")))
+        return web.json_response(await _in_thread(_status_payload, True))
+
+    @routes.post("/anomalous_tts/pretrained/download")
+    async def post_pretrained_download(request):
+        _require_local(request)
+        body = await _json_body(request)
+        ids = await _in_thread(_download_ids, body)
+        await _in_thread(downloads.start, ids)
+        return web.json_response({"ok": True})
+
+    @routes.get("/anomalous_tts/browse")
+    async def get_browse(request):
+        _require_local(request)
+        return web.json_response(await _in_thread(browse.listing, request.query.get("path")))

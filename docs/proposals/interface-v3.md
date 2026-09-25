@@ -1,6 +1,6 @@
 # 草案：接口版本 3（在界面里完成配置和导入）
 
-> **状态：草案，还没实现。** 确认后分步实现；实现完的部分并入 [../INTERFACE.md](../INTERFACE.md)，这份草案随之删除。
+> **状态：草案。** 第 1 步已实现并并入 [../INTERFACE.md](../INTERFACE.md)；导入（第 2 步）还没实现，实现后并入并删除这份草案。
 
 ## 目标
 
@@ -11,83 +11,11 @@
 3. 把 GPT、SoVITS、参考音频、参考台词拖进来，建好一个能直接用的角色；
 4. 选一个已经整理好的文件夹，作为角色库。
 
-Anomalous 仍然只做界面，所有文件操作都由节点完成。版本 3 只**增加**接口，版本 2 的接口不变；为了让 Anomalous 能判断节点支不支持，所有响应里的 `format` 改为 3。旧版节点没有 `/anomalous_tts/status`（返回 404），Anomalous 就隐藏这些功能。
+Anomalous 仍然只做界面，所有文件操作都由节点完成。导入接口只**增加**，不改已有接口。
 
-## 只允许本机
+## 已实现的部分
 
-下面标了 🔒 的接口会读写服务器上的文件。只有从本机访问（请求来自 `127.0.0.1` / `::1`）时才会执行，否则返回 403。用 `--listen` 让局域网里的其他电脑打开 ComfyUI 时，它们只能查看状态，不能导入和改设置。`status` 里的 `local` 字段告诉界面要不要把按钮变灰。
-
-## 节点自己的配置
-
-`ComfyUI/user/anomalous_tts.json`（在 ComfyUI 的用户目录里，更新插件不会丢）：
-
-```json
-{ "format": 1, "libraries": ["D:/voices/模型"], "pretrained": ["D:/GPT-SoVITS/GPT_SoVITS"] }
-```
-
-- `libraries`：额外的角色库。启动时和添加时用 `folder_paths.add_model_folder_path` 注册，和 yaml 里写的效果一样，不用重启。
-- `pretrained`：额外的底模来源（整合包的 `GPT_SoVITS` 文件夹，里面有 `pretrained_models`、`text`）。
-- `extra_model_paths.yaml` 仍然有效，两者一起用。
-
----
-
-## `GET /anomalous_tts/status`
-
-```json
-{
-  "format": 3,
-  "version": "0.1.0",
-  "local": true,
-  "libraries": [
-    { "path": "…/ComfyUI/models/gpt_sovits", "source": "default", "characters": 0, "writable": true },
-    { "path": "D:/voices/模型", "source": "app", "characters": 29, "writable": true }
-  ],
-  "pretrained": [
-    { "id": "hubert", "label": "chinese-hubert-base", "needed_for": "all", "size": 190000000, "state": "ok" },
-    { "id": "roberta", "label": "chinese-roberta-wwm-ext-large", "needed_for": "zh", "size": 650000000, "state": "missing" },
-    { "id": "g2pw", "label": "G2PWModel", "needed_for": "zh", "size": 600000000, "state": "downloading", "done": 123000000 }
-  ],
-  "dependencies": {
-    "ja": { "ok": true, "missing": [] },
-    "zh": { "ok": false, "missing": ["opencc"] },
-    "en": { "ok": true, "missing": [] }
-  }
-}
-```
-
-- `source`：`default`（`models/gpt_sovits`）、`yaml`（`extra_model_paths.yaml`）、`app`（在界面里添加的）。只有 `app` 的能在界面里移除。
-- `state`：`ok` / `missing` / `downloading` / `error`（带 `error` 文字）。
-- `dependencies` 只报告缺哪些包；界面给出可复制的安装命令，不替用户安装。
-- 状态每次实时计算，不需要缓存；界面在下载中每秒查询一次。
-
-## 🔒 `POST /anomalous_tts/pretrained/download`
-
-`{ "ids": ["roberta", "g2pw"] }`（不写 `ids` = 下载所有缺的）。立即返回 `{"ok": true}`，在后台下载；进度看 `status`。同一个文件不会同时下载两次。只有用户点了按钮才下载。
-
-## 🔒 `POST /anomalous_tts/pretrained/source`
-
-`{ "path": "D:/GPT-SoVITS/GPT_SoVITS" }` → 检查里面有没有可用的底模，有就记进配置，返回新的 `status`；一个都没有就返回 400 并说明找过哪些文件夹。`{ "path": "…", "remove": true }` 移除。
-
-## 🔒 `POST /anomalous_tts/libraries`
-
-`{ "path": "D:/voices/模型" }` 添加，`{ "path": "…", "remove": true }` 移除（只能移除 `app` 来源的）。路径必须是已存在的文件夹。返回新的 `status`，角色列表会重新扫描。**不复制、不移动任何文件。**
-
-## 🔒 `GET /anomalous_tts/browse?path=<文件夹>`
-
-给“手动选择路径”用的服务器端文件夹浏览（浏览器拿不到本机路径）。
-
-```json
-{
-  "path": "D:/GPT-SoVITS",
-  "parent": "D:/",
-  "dirs": ["GPT_weights_v2", "SoVITS_weights_v2", "output"],
-  "files": [{ "name": "xxx-e15.ckpt", "kind": "gpt", "size": 155000000 }]
-}
-```
-
-- 不写 `path` 时列出磁盘（Windows）或 `/`（其他系统）。
-- `files` 只列相关文件：`gpt`（.ckpt）、`sovits`（.pth）、`audio`（.wav/.ogg/.mp3/.flac）、`text`（.txt/.list）。
-- 只读，不跟随符号链接出去。
+准备状态、角色库、底模来源和下载、文件夹浏览已经实现，写在 [../INTERFACE.md](../INTERFACE.md) 第 5.2 节（接口版本 3）。下面只剩导入。🔒 的含义也见那里。
 
 ---
 
@@ -171,7 +99,7 @@ ComfyUI 默认每个请求最大 100MB，而 GPT、SoVITS 权重常常更大，�
 
 ## 实现顺序
 
-1. `status`、`libraries`、`browse`、`pretrained/*`（新用户最先卡住的地方）。
+1. ~~`status`、`libraries`、`browse`、`pretrained/*`~~（已完成）。
 2. `import/*`（上传、检查、创建、追加）。
 3. Anomalous 界面：准备状态卡 → 拖放导入和确认面板 → 手动选择路径。
 

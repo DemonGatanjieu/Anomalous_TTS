@@ -1,0 +1,169 @@
+"""Setup from the UI: libraries, pretrained sources, downloads, folder browsing, status."""
+
+import json
+import time
+import types
+
+import folder_paths
+import pytest
+from aiohttp import web
+
+from Anomalous_TTS import server
+from Anomalous_TTS.core import app_config, browse, characters, downloads, paths
+
+from test_planner import make_char
+
+
+@pytest.fixture
+def fresh(tmp_path, monkeypatch):
+    """Empty user directory and only the default library, restored afterwards."""
+    monkeypatch.setattr(folder_paths, "get_user_directory", lambda: str(tmp_path / "user"))
+    registered = folder_paths.folder_names_and_paths[paths.CATEGORY][0]
+    saved, saved_sources = list(registered), list(paths._sources)
+    registered[:] = [p for p in registered if paths._key(p) == paths._key(paths._default_library())]
+    paths._sources.clear()
+    characters.invalidate()
+    yield tmp_path
+    registered[:] = saved
+    paths._sources[:] = saved_sources
+    characters.invalidate()
+
+
+def test_added_library_is_registered_and_remembered(fresh):
+    lib = fresh / "voices"
+    make_char(lib, "阿罗娜")
+    paths.add_library(str(lib))
+    assert any(paths.is_inside(c.folder, str(lib)) for c in characters.scan(max_age=0).values())
+    assert json.loads((fresh / "user" / app_config.FILENAME).read_text(encoding="utf-8"))["libraries"] == [paths.norm(str(lib))]
+
+    # next start: registered again from the config file
+    registered = folder_paths.folder_names_and_paths[paths.CATEGORY][0]
+    registered[:] = registered[:1]
+    paths.register()
+    assert paths.norm(str(lib)) in [paths.norm(p) for p in folder_paths.get_folder_paths(paths.CATEGORY)]
+
+
+def test_remove_library_only_for_folders_added_in_the_ui(fresh):
+    lib, yaml_lib = fresh / "voices", fresh / "yaml_voices"
+    lib.mkdir()
+    yaml_lib.mkdir()
+    folder_paths.add_model_folder_path(paths.CATEGORY, str(yaml_lib))
+    paths.add_library(str(lib))
+    assert {l["source"] for l in paths.libraries()} == {"default", "yaml", "app"}
+
+    with pytest.raises(ValueError):
+        paths.remove_library(str(yaml_lib))
+    with pytest.raises(ValueError):
+        paths.remove_library(paths._default_library())
+    paths.remove_library(str(lib))
+    assert paths.norm(str(lib)) not in [l["path"] for l in paths.libraries()]
+    assert app_config.load()["libraries"] == []
+
+
+def test_add_library_rejects_missing_and_duplicate_folders(fresh):
+    with pytest.raises(ValueError, match="不存在"):
+        paths.add_library(str(fresh / "nope"))
+    (fresh / "voices").mkdir()
+    paths.add_library(str(fresh / "voices"))
+    with pytest.raises(ValueError, match="已经"):
+        paths.add_library(str(fresh / "voices"))
+
+
+def _fake_package(root):
+    """A GPT-SoVITS package's GPT_SoVITS folder with HuBERT and the English dictionaries."""
+    hubert = root / "pretrained_models" / paths.HUBERT_NAME
+    hubert.mkdir(parents=True)
+    for f in paths.HUBERT_FILES:
+        (hubert / f).write_bytes(b"x")
+    text = root / "text"
+    text.mkdir()
+    for f in paths.EN_DICT_FILES:
+        (text / f).write_bytes(b"x")
+    return root
+
+
+def test_pretrained_source_is_searched(fresh):
+    pkg = _fake_package(fresh / "GPT-SoVITS" / "GPT_SoVITS")
+    assert paths.locate("hubert") is None
+    paths.add_pretrained_source(str(pkg))
+    assert paths.is_inside(paths.locate("hubert"), str(pkg))
+    assert paths.is_inside(paths._find_en_dict(), str(pkg / "text"))
+    assert paths.pretrained_sources() == [paths.norm(str(pkg))]
+    assert app_config.load()["pretrained"] == [paths.norm(str(pkg))]
+
+    paths.remove_pretrained_source(str(pkg))
+    assert paths.locate("hubert") is None
+
+
+def test_pretrained_source_without_models_is_rejected(fresh):
+    (fresh / "empty").mkdir()
+    with pytest.raises(ValueError, match="没有找到底模"):
+        paths.add_pretrained_source(str(fresh / "empty"))
+    assert app_config.load()["pretrained"] == []
+
+
+def _wait_for(check, seconds=5.0):
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if check():
+            return
+        time.sleep(0.02)
+    raise AssertionError("timed out")
+
+
+def test_download_runs_in_background_and_reports_errors(fresh, monkeypatch):
+    fetched = []
+
+    def fake_fetch(item_id):
+        if item_id == "sv":
+            raise RuntimeError("网络不通")
+        fetched.append(item_id)
+
+    monkeypatch.setattr(paths, "fetch", fake_fetch)
+    monkeypatch.setattr(paths, "locate", lambda item_id, dirs=None: "done" if item_id in fetched else None)
+    downloads.start(["hubert", "sv"])
+    _wait_for(lambda: downloads.state("hubert") is None and (downloads.state("sv") or {}).get("state") == "error")
+    assert fetched == ["hubert"]
+    assert downloads.state("sv")["error"] == "网络不通"
+
+    downloads.start(["hubert"])  # already there: no new job
+    assert downloads.state("hubert") is None
+    with pytest.raises(ValueError):
+        downloads.start(["nope"])
+
+
+def test_browse_lists_folders_and_usable_files(fresh):
+    folder = fresh / "pkg"
+    (folder / "GPT_weights_v2").mkdir(parents=True)
+    (folder / ".git").mkdir()
+    for name in ("a-e15.ckpt", "b_e8_s100.pth", "ref.wav", "all.list", "readme.md"):
+        (folder / name).write_bytes(b"xx")
+    out = browse.listing(str(folder))
+    assert out["path"] == paths.norm(str(folder))
+    assert out["parent"] == paths.norm(str(fresh))
+    assert out["dirs"] == ["GPT_weights_v2"]
+    assert {f["name"]: f["kind"] for f in out["files"]} == {
+        "a-e15.ckpt": "gpt", "b_e8_s100.pth": "sovits", "ref.wav": "audio", "all.list": "text"}
+
+    assert browse.listing(None)["dirs"]  # drives, or "/"
+    with pytest.raises(ValueError):
+        browse.listing(str(fresh / "nope"))
+
+
+def test_status_counts_characters_per_library(fresh):
+    lib = fresh / "voices"
+    make_char(lib, "阿罗娜")
+    make_char(lib, "普拉娜")
+    paths.add_library(str(lib))
+    status = server._status_payload(local=True)
+    assert status["format"] == server.API_FORMAT and status["local"] is True
+    counts = {l["path"]: l["characters"] for l in status["libraries"]}
+    assert counts[paths.norm(str(lib))] == 2
+    assert [p["id"] for p in status["pretrained"]] == list(paths.PRETRAINED_IDS)
+    assert set(status["dependencies"]) == {"ja", "zh", "en"}
+
+
+def test_writes_are_refused_from_other_computers():
+    server._require_local(types.SimpleNamespace(remote="127.0.0.1"))
+    with pytest.raises(web.HTTPForbidden):
+        server._require_local(types.SimpleNamespace(remote="192.168.1.20"))

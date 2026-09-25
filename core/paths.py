@@ -1,28 +1,38 @@
 """Model folders and pretrained files.
 
-All paths come from ComfyUI's ``folder_paths``. The ``gpt_sovits`` category
-defaults to ``ComfyUI/models/gpt_sovits`` and can be extended in
-``extra_model_paths.yaml``::
+Character libraries are the roots of ComfyUI's ``gpt_sovits`` model category:
+``ComfyUI/models/gpt_sovits``, folders from ``extra_model_paths.yaml``::
 
     my_voices:
         base_path: D:/voices
         gpt_sovits: characters
+
+and folders added from the UI (core/app_config.py, registered without a restart).
+
+Pretrained files are looked up under every library (``<root>/pretrained/<name>``
+or ``<root>/<name>``) and in GPT-SoVITS packages added as pretrained sources
+(``GPT_SoVITS``, its ``pretrained_models`` and ``text``). Missing ones are
+downloaded into ``models/gpt_sovits/pretrained`` on first use or from the UI.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import shutil
 import threading
 import urllib.request
-from typing import List, Optional
+import zipfile
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
 
 import folder_paths
+
+from . import app_config
 
 log = logging.getLogger("Anomalous_TTS")
 
 CATEGORY = "gpt_sovits"
-PRETRAINED_DIRNAMES = ("pretrained", "pretrained_models")
 
 HF_REPO = "lj1995/GPT-SoVITS"
 HUBERT_NAME = "chinese-hubert-base"
@@ -33,19 +43,55 @@ G2PW_NAME = "G2PWModel"
 G2PW_FILES = ("g2pW.onnx", "config.py", "POLYPHONIC_CHARS.txt", "MONOPHONIC_CHARS.txt")
 # Same source GPT-SoVITS downloads from (text/g2pw/onnx_api.py).
 G2PW_URL = "https://www.modelscope.cn/models/kamiorinn/g2pw/resolve/master/G2PWModel_1.1.zip"
+SV_FILE = "pretrained_eres2netv2w24s4ep4.ckpt"
 
 # Pinned to the GPT-SoVITS commit our vendored code comes from (see UPSTREAM.md).
 GSV_COMMIT = "48b1a0169a28582a8984402f82cf438d3bfa6aca"
 JA_USERDICT_URL = (
     f"https://raw.githubusercontent.com/RVC-Boss/GPT-SoVITS/{GSV_COMMIT}/GPT_SoVITS/text/ja_userdic/userdict.csv"
 )
+EN_DICT_FILES = ("cmudict.rep", "cmudict-fast.rep", "engdict-hot.rep", "namedict_cache.pickle")
+EN_DICT_URL = f"https://raw.githubusercontent.com/RVC-Boss/GPT-SoVITS/{GSV_COMMIT}/GPT_SoVITS/text/{{name}}"
+# nltk_data packages g2p_en / GPT-SoVITS english.py need.
+NLTK_PACKAGES = (
+    "taggers/averaged_perceptron_tagger_eng",
+    "taggers/averaged_perceptron_tagger",
+    "corpora/cmudict",
+)
+NLTK_URL = "https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/{name}.zip"
 
 _lock = threading.Lock()
+_sources: List[str] = []  # pretrained sources from app_config, loaded by register()
+
+
+def norm(path: str) -> str:
+    """Absolute path with ``/`` separators, as shown in the UI and stored in app_config."""
+    return os.path.abspath(path).replace("\\", "/")
+
+
+def _key(path: str) -> str:
+    return os.path.normcase(os.path.abspath(path))
+
+
+def is_inside(path: str, root: str) -> bool:
+    path, root = _key(path), _key(root)
+    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+
+
+# ---------- character libraries ----------
+def _default_library() -> str:
+    return os.path.join(folder_paths.models_dir, CATEGORY)
 
 
 def register() -> None:
-    default = os.path.join(folder_paths.models_dir, CATEGORY)
-    folder_paths.add_model_folder_path(CATEGORY, default, is_default=True)
+    folder_paths.add_model_folder_path(CATEGORY, _default_library(), is_default=True)
+    config = app_config.load()
+    for folder in config["libraries"]:
+        if os.path.isdir(folder):
+            folder_paths.add_model_folder_path(CATEGORY, folder)
+        else:
+            log.warning("[Anomalous_TTS] 找不到角色库 %s，已跳过（可以在 Anomalous 里移除）。", folder)
+    _sources[:] = config["pretrained"]
 
 
 def roots() -> List[str]:
@@ -62,19 +108,89 @@ def default_root() -> str:
     return path
 
 
-def _candidates(name: str) -> List[str]:
+def libraries() -> List[Dict]:
+    """Every configured library: where it comes from and whether new characters can go there."""
+    added = {_key(p) for p in app_config.load()["libraries"]}
+    default = _key(_default_library())
     out = []
-    for root in folder_paths.get_folder_paths(CATEGORY):
-        out.append(os.path.join(root, "pretrained", name))
-        out.append(os.path.join(root, name))  # a root that *is* a GPT-SoVITS pretrained_models folder
+    for p in folder_paths.get_folder_paths(CATEGORY):
+        source = "default" if _key(p) == default else "app" if _key(p) in added else "yaml"
+        exists = os.path.isdir(p)
+        out.append({"path": norm(p), "source": source, "exists": exists, "writable": exists and os.access(p, os.W_OK)})
     return out
 
 
-def find_pretrained(name: str, required: tuple) -> Optional[str]:
-    for path in _candidates(name):
-        if all(os.path.isfile(os.path.join(path, f)) for f in required):
+def add_library(folder: str) -> None:
+    folder = norm(folder)
+    if not os.path.isdir(folder):
+        raise ValueError(f"文件夹不存在：{folder}")
+    if any(_key(p) == _key(folder) for p in folder_paths.get_folder_paths(CATEGORY)):
+        raise ValueError(f"已经是角色库了：{folder}")
+    app_config.add("libraries", folder)
+    folder_paths.add_model_folder_path(CATEGORY, folder)
+
+
+def remove_library(folder: str) -> None:
+    """Only folders added from the UI; yaml and the default folder stay."""
+    stored = next((p for p in app_config.load()["libraries"] if _key(p) == _key(folder)), None)
+    if stored is None:
+        raise ValueError(f"只能移除在界面里添加的角色库：{folder}")
+    app_config.remove("libraries", stored)
+    registered = folder_paths.folder_names_and_paths[CATEGORY][0]
+    registered[:] = [p for p in registered if _key(p) != _key(stored)]
+
+
+# ---------- pretrained lookup ----------
+def _source_dirs(source: str) -> List[str]:
+    return [source, os.path.join(source, "pretrained_models"), os.path.join(source, "text")]
+
+
+def _search_dirs() -> List[str]:
+    dirs = []
+    for root in folder_paths.get_folder_paths(CATEGORY):
+        dirs += [os.path.join(root, "pretrained"), root]  # a root may *be* a pretrained_models folder
+    for source in _sources:
+        dirs += _source_dirs(source)
+    return dirs
+
+
+def _has(folder: str, files: Tuple[str, ...]) -> bool:
+    return all(os.path.isfile(os.path.join(folder, f)) for f in files)
+
+
+def find_pretrained(name: str, required: Tuple[str, ...], dirs: Optional[List[str]] = None) -> Optional[str]:
+    for d in _search_dirs() if dirs is None else dirs:
+        path = os.path.join(d, name)
+        if _has(path, required):
             return path
     return None
+
+
+def _find_en_dict(dirs: Optional[List[str]] = None) -> Optional[str]:
+    for d in _search_dirs() if dirs is None else dirs:
+        for cand in (os.path.join(d, "en_dict"), d):  # a GPT-SoVITS ``text`` folder holds them directly
+            if _has(cand, EN_DICT_FILES):
+                return cand
+    return None
+
+
+def _download_target() -> str:
+    return os.path.join(default_root(), "pretrained")
+
+
+def _nltk_missing() -> List[str]:
+    nltk_dir = os.path.join(_download_target(), "nltk_data")
+    return [
+        n for n in NLTK_PACKAGES
+        if not (os.path.isdir(os.path.join(nltk_dir, *n.split("/"))) or os.path.isfile(os.path.join(nltk_dir, *n.split("/")) + ".zip"))
+    ]
+
+
+def _download(url: str, dest: str) -> None:
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    tmp = dest + ".part"
+    urllib.request.urlretrieve(url, tmp)
+    os.replace(tmp, dest)
 
 
 def _hf_pretrained(name: str, files: tuple) -> str:
@@ -83,7 +199,7 @@ def _hf_pretrained(name: str, files: tuple) -> str:
         found = find_pretrained(name, files)
         if found:
             return found
-        target = os.path.join(default_root(), "pretrained")
+        target = _download_target()
         log.info("[Anomalous_TTS] 下载 %s 到 %s ...", name, target)
         try:
             from huggingface_hub import hf_hub_download
@@ -94,7 +210,8 @@ def _hf_pretrained(name: str, files: tuple) -> str:
             raise RuntimeError(
                 f"无法下载 {name}（{e}）。请手动从 https://huggingface.co/{HF_REPO}/tree/main/{name} "
                 f"下载 {', '.join(files)}，放到 {os.path.join(target, name)}。"
-                "也可以在 extra_model_paths.yaml 里把 GPT-SoVITS 整合包的 GPT_SoVITS/pretrained_models 加到 gpt_sovits。"
+                "也可以在 Anomalous 的音频页里指定已有的 GPT-SoVITS 整合包，"
+                "或在 extra_model_paths.yaml 里把整合包的 GPT_SoVITS/pretrained_models 加到 gpt_sovits。"
             ) from e
         return os.path.join(target, name)
 
@@ -107,30 +224,9 @@ def roberta_dir() -> str:
     return _hf_pretrained(ROBERTA_NAME, ROBERTA_FILES)
 
 
-SV_FILE = "pretrained_eres2netv2w24s4ep4.ckpt"
-
-
 def sv_path() -> str:
     """Speaker encoder for v2Pro / v2ProPlus (~100MB), downloaded on first use."""
     return os.path.join(_hf_pretrained("sv", (SV_FILE,)), SV_FILE)
-
-
-EN_DICT_FILES = ("cmudict.rep", "cmudict-fast.rep", "engdict-hot.rep", "namedict_cache.pickle")
-EN_DICT_URL = f"https://raw.githubusercontent.com/RVC-Boss/GPT-SoVITS/{GSV_COMMIT}/GPT_SoVITS/text/{{name}}"
-# nltk_data packages g2p_en / GPT-SoVITS english.py need.
-NLTK_PACKAGES = (
-    "taggers/averaged_perceptron_tagger_eng",
-    "taggers/averaged_perceptron_tagger",
-    "corpora/cmudict",
-)
-NLTK_URL = "https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/{name}.zip"
-
-
-def _download(url: str, dest: str) -> None:
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
-    tmp = dest + ".part"
-    urllib.request.urlretrieve(url, tmp)
-    os.replace(tmp, dest)
 
 
 def english_dirs():
@@ -140,15 +236,8 @@ def english_dirs():
     downloads through an HTTP proxy, which is common on users' machines.
     """
     with _lock:
-        pretrained = os.path.join(default_root(), "pretrained")
-        dict_dir = None
-        for root in folder_paths.get_folder_paths(CATEGORY):
-            for cand in (os.path.join(root, "pretrained", "en_dict"), os.path.join(root, "en_dict"), root):
-                if all(os.path.isfile(os.path.join(cand, f)) for f in EN_DICT_FILES):
-                    dict_dir = cand
-                    break
-            if dict_dir:
-                break
+        pretrained = _download_target()
+        dict_dir = _find_en_dict()
         if dict_dir is None:
             dict_dir = os.path.join(pretrained, "en_dict")
             log.info("[Anomalous_TTS] 下载英语词典到 %s ...", dict_dir)
@@ -159,17 +248,33 @@ def english_dirs():
         os.makedirs(cache_dir, exist_ok=True)
 
         nltk_dir = os.path.join(pretrained, "nltk_data")
-        for name in NLTK_PACKAGES:
+        for name in _nltk_missing():
             target = os.path.join(nltk_dir, *name.split("/"))
-            if os.path.isdir(target) or os.path.isfile(target + ".zip"):
-                continue
-            import zipfile
-
             log.info("[Anomalous_TTS] 下载 nltk 数据 %s ...", name)
             _download(NLTK_URL.format(name=name), target + ".zip")
             with zipfile.ZipFile(target + ".zip") as zf:
                 zf.extractall(os.path.dirname(target))
         return dict_dir, cache_dir, nltk_dir
+
+
+def _download_g2pw() -> None:
+    """Called with ``_lock`` held. Leaves nothing half-written on failure."""
+    target = _download_target()
+    os.makedirs(target, exist_ok=True)
+    zip_path = os.path.join(target, "G2PWModel_1.1.zip")
+    log.info("[Anomalous_TTS] 下载中文多音字模型 G2PWModel 到 %s ...", target)
+    try:
+        _download(G2PW_URL, zip_path)
+        with zipfile.ZipFile(zip_path) as zf:
+            zf.extractall(target)
+        extracted = os.path.join(target, "G2PWModel_1.1")
+        final = os.path.join(target, G2PW_NAME)
+        if os.path.isdir(extracted) and not os.path.exists(final):
+            shutil.move(extracted, final)
+    finally:
+        for leftover in (zip_path, zip_path + ".part"):
+            if os.path.exists(leftover):
+                os.remove(leftover)
 
 
 _g2pw_state = {"tried": False}
@@ -182,29 +287,21 @@ def g2pw_dir() -> Optional[str]:
         if found or _g2pw_state["tried"]:
             return found
         _g2pw_state["tried"] = True
-        target = os.path.join(default_root(), "pretrained")
-        os.makedirs(target, exist_ok=True)
-        zip_path = os.path.join(target, "G2PWModel_1.1.zip")
         try:
-            import shutil
-            import zipfile
-
-            log.info("[Anomalous_TTS] 下载中文多音字模型 G2PWModel 到 %s ...", target)
-            urllib.request.urlretrieve(G2PW_URL, zip_path + ".part")
-            os.replace(zip_path + ".part", zip_path)
-            with zipfile.ZipFile(zip_path) as zf:
-                zf.extractall(target)
-            extracted = os.path.join(target, "G2PWModel_1.1")
-            final = os.path.join(target, G2PW_NAME)
-            if os.path.isdir(extracted) and not os.path.exists(final):
-                shutil.move(extracted, final)
-            os.remove(zip_path)
+            _download_g2pw()
         except Exception as e:
-            log.warning("[Anomalous_TTS] G2PWModel 下载失败：%s。可手动下载 %s 解压到 %s", e, G2PW_URL, target)
-            for leftover in (zip_path, zip_path + ".part"):
-                if os.path.exists(leftover):
-                    os.remove(leftover)
+            log.warning("[Anomalous_TTS] G2PWModel 下载失败：%s。可手动下载 %s 解压到 %s", e, G2PW_URL, _download_target())
         return find_pretrained(G2PW_NAME, G2PW_FILES)
+
+
+def _ja_userdic_dir(download: bool) -> Optional[str]:
+    """Called with ``_lock`` held."""
+    folder = find_pretrained("ja_userdic", ("userdict.csv",))
+    if folder or not download:
+        return folder
+    folder = os.path.join(_download_target(), "ja_userdic")
+    _download(JA_USERDICT_URL, os.path.join(folder, "userdict.csv"))
+    return folder
 
 
 class ComfyResources:
@@ -231,17 +328,7 @@ def ensure_ja_userdict() -> None:
         try:
             import pyopenjtalk
 
-            folder = None
-            for path in _candidates("ja_userdic"):
-                if os.path.isfile(os.path.join(path, "userdict.csv")):
-                    folder = path
-                    break
-            if folder is None:
-                folder = os.path.join(default_root(), "pretrained", "ja_userdic")
-                os.makedirs(folder, exist_ok=True)
-                tmp = os.path.join(folder, "userdict.csv.part")
-                urllib.request.urlretrieve(JA_USERDICT_URL, tmp)
-                os.replace(tmp, os.path.join(folder, "userdict.csv"))
+            folder = _ja_userdic_dir(download=True)
             csv_path = os.path.join(folder, "userdict.csv")
             dic_path = os.path.join(folder, "user.dict")
             if not os.path.isfile(dic_path) or os.path.getmtime(dic_path) < os.path.getmtime(csv_path):
@@ -249,3 +336,118 @@ def ensure_ja_userdict() -> None:
             pyopenjtalk.update_global_jtalk_with_user_dict(dic_path)
         except Exception as e:
             log.warning("[Anomalous_TTS] 日语用户词典不可用，英文单词会按字母读：%s", e)
+
+
+# ---------- pretrained status and explicit downloads (the UI's setup card) ----------
+@dataclass(frozen=True)
+class Pretrained:
+    id: str
+    label: str
+    needed_for: str  # "all", "zh", "en", "ja" or "v2pro"
+    size: int  # approximate download size in bytes, for the progress bar
+    required: bool  # False: the node works without it, with lower quality
+
+
+PRETRAINED = (
+    Pretrained("hubert", HUBERT_NAME, "all", 190_000_000, True),
+    Pretrained("roberta", ROBERTA_NAME, "zh", 650_000_000, True),
+    Pretrained("g2pw", G2PW_NAME, "zh", 610_000_000, False),
+    Pretrained("sv", "sv (ERes2NetV2)", "v2pro", 105_000_000, True),
+    Pretrained("english", "英语词典 + nltk 数据", "en", 30_000_000, True),
+    Pretrained("ja_userdic", "日语用户词典", "ja", 17_000_000, False),
+)
+PRETRAINED_IDS = tuple(p.id for p in PRETRAINED)
+
+
+def locate(item_id: str, dirs: Optional[List[str]] = None) -> Optional[str]:
+    """Where a pretrained item is, or None. ``dirs`` limits the search (used to check a new source)."""
+    if item_id == "hubert":
+        return find_pretrained(HUBERT_NAME, HUBERT_FILES, dirs)
+    if item_id == "roberta":
+        return find_pretrained(ROBERTA_NAME, ROBERTA_FILES, dirs)
+    if item_id == "g2pw":
+        return find_pretrained(G2PW_NAME, G2PW_FILES, dirs)
+    if item_id == "sv":
+        return find_pretrained("sv", (SV_FILE,), dirs)
+    if item_id == "english":
+        found = _find_en_dict(dirs)
+        return found if dirs is not None or not _nltk_missing() else None
+    if item_id == "ja_userdic":
+        return find_pretrained("ja_userdic", ("userdict.csv",), dirs)
+    raise ValueError(f"未知的底模：{item_id}")
+
+
+def fetch(item_id: str) -> None:
+    """Download one item now (blocking). Raises with a readable message on failure."""
+    if item_id == "hubert":
+        hubert_dir()
+    elif item_id == "roberta":
+        roberta_dir()
+    elif item_id == "sv":
+        sv_path()
+    elif item_id == "english":
+        english_dirs()
+    elif item_id == "g2pw":
+        with _lock:
+            if not find_pretrained(G2PW_NAME, G2PW_FILES):
+                _download_g2pw()
+    elif item_id == "ja_userdic":
+        with _lock:
+            _ja_userdic_dir(download=True)
+    else:
+        raise ValueError(f"未知的底模：{item_id}")
+
+
+def download_paths(item_id: str) -> List[str]:
+    """Files and folders a download of ``item_id`` writes to, for measuring progress."""
+    target = _download_target()
+    hf_partial = os.path.join(target, ".cache", "huggingface", "download")
+    names = {"hubert": HUBERT_NAME, "roberta": ROBERTA_NAME, "sv": "sv"}
+    if item_id in names:
+        return [os.path.join(target, names[item_id]), os.path.join(hf_partial, names[item_id])]
+    if item_id == "g2pw":
+        return [os.path.join(target, "G2PWModel_1.1.zip.part"), os.path.join(target, "G2PWModel_1.1"), os.path.join(target, G2PW_NAME)]
+    if item_id == "english":
+        return [os.path.join(target, "en_dict"), os.path.join(target, "nltk_data")]
+    return [os.path.join(target, "ja_userdic")]
+
+
+def pretrained_status() -> List[Dict]:
+    out = []
+    for p in PRETRAINED:
+        found = locate(p.id)
+        item = {"id": p.id, "label": p.label, "needed_for": p.needed_for, "size": p.size,
+                "required": p.required, "state": "ok" if found else "missing"}
+        if found:
+            item["path"] = norm(found)
+        out.append(item)
+    return out
+
+
+def pretrained_sources() -> List[str]:
+    return list(_sources)
+
+
+def add_pretrained_source(folder: str) -> None:
+    """A GPT-SoVITS package folder (``GPT_SoVITS``, or its ``pretrained_models``)."""
+    folder = norm(folder)
+    if not os.path.isdir(folder):
+        raise ValueError(f"文件夹不存在：{folder}")
+    if any(_key(s) == _key(folder) for s in _sources):
+        raise ValueError(f"已经添加过了：{folder}")
+    dirs = _source_dirs(folder)
+    if not any(locate(i, dirs) for i in PRETRAINED_IDS):
+        raise ValueError(
+            f"{folder} 里没有找到底模。请选择 GPT-SoVITS 整合包里的 GPT_SoVITS 文件夹"
+            "（里面有 pretrained_models 和 text）。"
+        )
+    app_config.add("pretrained", folder)
+    _sources.append(folder)
+
+
+def remove_pretrained_source(folder: str) -> None:
+    stored = next((s for s in _sources if _key(s) == _key(folder)), None)
+    if stored is None:
+        raise ValueError(f"没有添加过这个底模来源：{folder}")
+    app_config.remove("pretrained", stored)
+    _sources.remove(stored)

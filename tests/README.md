@@ -29,6 +29,7 @@ assets/
 | `test_langdetect.py` | 自动判断语言 |
 | `test_settings.py` | 角色设置文件的校验和读写 |
 | `test_planner.py` | 角色识别、情绪、换人、停顿、每句种子 |
+| `test_setup.py` | 在界面里添加 / 移除角色库和底模来源、后台下载、文件夹浏览、准备状态、只允许本机写入 |
 | `test_frontend.py` | 日 / 中 / 英音素与基准一致（基准已和官方 GPT-SoVITS 对过，见 UPSTREAM.md） |
 | `test_engine.py` | 批量解码与官方逐句解码结果完全相同；批量分组不影响结果；缓存和可复现性 |
 

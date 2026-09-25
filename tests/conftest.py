@@ -18,6 +18,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 MODELS = Path(tempfile.mkdtemp(prefix="atts_models_"))
+USER = Path(tempfile.mkdtemp(prefix="atts_user_"))
 
 
 def _stub_comfy():
@@ -33,6 +34,7 @@ def _stub_comfy():
 
         fp.add_model_folder_path = add_model_folder_path
         fp.get_folder_paths = lambda name: list(fp.folder_names_and_paths[name][0])
+        fp.get_user_directory = lambda: str(USER)
         sys.modules["folder_paths"] = fp
     if "comfy" not in sys.modules:
         import torch
