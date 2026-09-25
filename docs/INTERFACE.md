@@ -1,6 +1,6 @@
 # Anomalous_TTS ↔ Anomalous Model Browser 接口约定
 
-版本：3（2026-09-25）
+版本：4（2026-09-25）
 
 两个项目在不同的对话里开发。这份文档是双方唯一的约定：**Anomalous 只依赖这里写的东西**，其余都是 Anomalous_TTS 的内部实现，可以随时改。
 
@@ -29,7 +29,7 @@ Anomalous 推送剧本时只需要设置两个输入：
 
 ## 2. 角色
 
-一个角色 = 一个文件夹，放在某个**角色库**里。角色库就是 ComfyUI 模型分类 `gpt_sovits` 的根目录：默认 `ComfyUI/models/gpt_sovits/`，`extra_model_paths.yaml` 里写的，以及在界面里添加的（`POST /anomalous_tts/libraries`，不用重启）。
+一个角色 = 一个文件夹，放在某个**角色库**里。角色库就是 ComfyUI 模型分类 `gpt_sovits` 的根目录：默认 `ComfyUI/models/gpt_sovits/`、`extra_model_paths.yaml` 里写的、界面里选的**存放位置**（导入的角色放在这里，见 5.2 `storage`），以及以前的存放位置里还没移走的角色。
 
 - 根目录下的每个子文件夹是一个角色；文件夹里（含子文件夹）至少要有一个 `.ckpt`（GPT 权重）和一个 `.pth`（SoVITS 权重）。
 - 如果这个子文件夹下面有 2 个及以上各自带权重的子文件夹（比如日配、中配），每个子文件夹单独算一个角色，名字是 `角色/子文件夹`。
@@ -92,7 +92,7 @@ Anomalous 推送剧本时只需要设置两个输入：
 
 ## 5. HTTP 接口
 
-都挂在 ComfyUI 服务器上（默认 `http://127.0.0.1:8188`）。所有 JSON 响应都带 `"format": 3`。
+都挂在 ComfyUI 服务器上（默认 `http://127.0.0.1:8188`）。所有 JSON 响应都带 `"format": 4`。
 
 标了 🔒 的接口会读写服务器上的文件，只接受本机的请求（`127.0.0.1` / `::1`），其他电脑访问返回 403。`status.local` 告诉界面当前是不是本机。
 
@@ -151,19 +151,22 @@ Anomalous 推送剧本时只需要设置两个输入：
 - 服务器会校验：`gpt` / `sovits` / 各 `audio` 必须是这个角色文件夹里存在的文件；不合格返回 400 和原因。
 - 成功返回 `{"ok": true, "character": {…同单个角色详情…}}`。
 
-### 5.2 准备状态（角色库、底模、依赖）
+### 5.2 准备状态（存放位置、底模、依赖）
 
-在界面里添加的角色库和底模来源记在 `ComfyUI/user/anomalous_tts.json`（节点自己管理，Anomalous 不直接读写）。
+存放位置、以前的存放位置和底模来源记在 `ComfyUI/user/anomalous_tts.json`（节点自己管理，Anomalous 不直接读写）。
 
 #### `GET /anomalous_tts/status`
 
 ```json
 {
-  "format": 3,
+  "format": 4,
   "local": true,
+  "storage": "D:/voices",
+  "move": { "state": "moving", "from": "…/ComfyUI/models/gpt_sovits", "to": "D:/voices", "total": 29, "done": 3,
+            "current": "阿罗娜", "bytes_total": 0, "bytes_done": 0, "moved": ["伊吹", "优香", "伊蕾娜"], "error": null },
   "libraries": [
-    { "path": "…/ComfyUI/models/gpt_sovits", "source": "default", "exists": true, "writable": true, "characters": 0 },
-    { "path": "D:/voices/模型", "source": "app", "exists": true, "writable": true, "characters": 29 }
+    { "path": "…/ComfyUI/models/gpt_sovits", "source": "default", "storage": false, "exists": true, "writable": true, "characters": 26 },
+    { "path": "D:/voices", "source": "storage", "storage": true, "exists": true, "writable": true, "characters": 3 }
   ],
   "pretrained": [
     { "id": "hubert", "label": "chinese-hubert-base", "needed_for": "all", "size": 190000000, "required": true, "state": "ok", "path": "…" },
@@ -178,15 +181,25 @@ Anomalous 推送剧本时只需要设置两个输入：
 ```
 
 - 路径一律用 `/` 分隔。
-- `libraries[].source`：`default`（`models/gpt_sovits`）、`yaml`（`extra_model_paths.yaml`）、`app`（在界面里添加的，只有这种能移除）。`characters` 是这个角色库里的角色数。
+- `storage`：存放位置，导入的角色放在这里（没设置过就是 `models/gpt_sovits`）。`libraries[].storage` 标出它是哪一项。
+- `libraries[].source`：`default`（`models/gpt_sovits`）、`storage`（设置的存放位置）、`app`（以前的存放位置，还有角色没移走；只有这种能移除）、`yaml`（`extra_model_paths.yaml`）。`characters` 是这里的角色数。
+- `move`：最近一次移动（没有则为 `null`）。`state` 为 `moving` / `done` / `error`；`done` / `total` 按角色计；跨盘移动时 `bytes_done` / `bytes_total` 是已复制 / 总字节数（同盘是改名，都是 0）；`error` 是停下的原因。
 - `pretrained[].id`：`hubert`、`roberta`、`g2pw`、`sv`、`english`、`ja_userdic`。`needed_for`：`all` / `zh` / `en` / `ja` / `v2pro`。`required: false` 表示缺了也能用，只是效果差一点（g2pw 缺失时多音字改用 pypinyin；日语用户词典缺失时英文单词按字母读）。
 - `pretrained[].state`：`ok`（带 `path`）、`missing`、`queued`、`downloading`（带 `done`，已写入的字节数；`size` 是大约的总大小）、`error`（带 `error`）。
 - `dependencies` 只报告缺哪些包，`command` 是给运行 ComfyUI 的那个 Python 安装它们的命令。节点不替用户安装。
-- 每次实时计算；下载中可以每秒查一次。
+- 每次实时计算；下载或移动中可以每秒查一次。
+
+#### 🔒 `POST /anomalous_tts/storage`
+
+`{ "path": "D:/voices", "move": true }`：把存放位置改成这个文件夹（必须存在、可写，不能和现在的位置互相包含），以后导入的角色都放这里。
+
+- `move: true`：把现在存放位置里的角色逐个移过去（后台进行，进度看 `status.move`）。同一个盘直接改名；跨盘先复制到新位置的暂存区，放好后再删原来的。新位置已有同名文件夹、或出错时停下，正在移的那个角色留在原处，没移走的继续能用。不是角色的文件夹（例如 `pretrained`）不动。
+- `move: false`：只改以后的位置。原来的位置如果还有角色，继续读取（`libraries` 里 `source: app`）。
+- 移动中再改返回 400。成功返回新的 `status`。
 
 #### 🔒 `POST /anomalous_tts/libraries`
 
-`{ "path": "D:/voices/模型" }` 添加，`{ "path": "…", "remove": true }` 移除（只能移除 `app` 来源的）。文件夹必须存在，不能重复添加。**不复制、不移动任何文件。**成功返回新的 `status`（角色列表同时重新扫描）；不合格返回 400 和原因。
+`{ "path": "…", "remove": true }`：不再读取一个以前的存放位置（`source: app`）。**不删除任何文件**，只是不再列出里面的角色。其他来源不能移除；不带 `remove` 返回 400。成功返回新的 `status`。
 
 #### 🔒 `POST /anomalous_tts/pretrained/source`
 
@@ -219,7 +232,7 @@ Anomalous 推送剧本时只需要设置两个输入：
 
 ComfyUI 默认每个请求最大 100MB，权重常常更大，所以分块上传。
 
-- 开始：JSON `{ "name": "ALuoNa-e15.ckpt", "size": 155312957, "library": "D:/voices/模型" }`（`library` 可省略，默认第一个可写的角色库）→ `{ "upload": "<id>" }`。
+- 开始：JSON `{ "name": "ALuoNa-e15.ckpt", "size": 155312957, "library": "D:/voices/模型" }`（`library` 可省略，默认存放位置）→ `{ "upload": "<id>" }`。
 - 传块：`POST /anomalous_tts/import/upload?upload=<id>&offset=<字节>`，请求体是这一块的原始字节（建议 8MB 一块）→ `{ "received": <已收字节> }`。`offset` 不等于已收字节时返回 409 `{"error": …, "received": n}`，从 `n` 继续即可。超过声明的 `size` 返回 400。
 - 上传的文件暂存在角色库里的 `.anomalous_tts_staging/`（扫描角色时跳过）。24 小时没动的暂存文件，下次开始上传时清理；节点重启后没用完的上传也会失效。
 
@@ -282,7 +295,7 @@ ComfyUI 默认每个请求最大 100MB，权重常常更大，所以分块上传
     anomalous_tts.json
   ```
 
-- 新建角色至少要有一个 `.ckpt` 和一个 `.pth`。`character` 必须是合法的文件夹名，`library` 必须是 `status.libraries` 里 `writable` 的一项。
+- 新建角色至少要有一个 `.ckpt` 和一个 `.pth`。`character` 必须是合法的文件夹名，`library` 必须是 `status.libraries` 里 `writable` 的一项，通常就是 `status.storage`。
 - 同名文件夹已存在、或往已有角色里加的文件已存在：409，什么都不改。设置不合格、序号不对：400，什么都不改。
 - 全有或全无：先在暂存区拼好，最后一步才放进角色库；中途失败时角色库保持原样，上传的文件回到暂存区，可以直接重试。
 - 成功 → `{"ok": true, "character": {…单个角色详情…}}`，角色列表同时刷新。
@@ -294,3 +307,4 @@ ComfyUI 默认每个请求最大 100MB，权重常常更大，所以分块上传
 - 1（2026-09-24）：初版。
 - 2（2026-09-25）：`/anomalous_tts/characters` 列表只返回摘要（去掉 `gpt` / `sovits` / `audio`，加 `counts`），文件列表改由 `?name=` 取单个角色；加 `?refresh=1`；`format` 改为 2。文件名里只是扩展名的部分（`X.ogg.wav`）不再当作情绪。节点的 `reference_audio` 改为文本框（相对路径）。
 - 3（2026-09-25）：加第 5.2 节（`status`、`libraries`、`pretrained/source`、`pretrained/download`、`browse`）和第 5.3 节（`import/upload`、`import/discard`、`import/inspect`、`import/commit`）；角色库可以在界面里添加；`POST /settings` 只接受本机请求；`format` 改为 3。
+- 4（2026-09-25）：只有一个存放位置：加 `POST /anomalous_tts/storage`（可以把角色移过去），`status` 加 `storage`、`move`，`libraries[]` 加 `storage` 字段和 `source: storage`；`POST /anomalous_tts/libraries` 只能移除以前的存放位置，**不能再添加**；上传默认放在存放位置；`format` 改为 4。台词文件也认 `.lab`，导入检查的 `text_source` 加 `lab`、`filename`。

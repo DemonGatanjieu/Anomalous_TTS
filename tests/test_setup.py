@@ -1,6 +1,5 @@
-"""Setup from the UI: libraries, pretrained sources, downloads, folder browsing, status."""
+"""Setup from the UI: pretrained sources, downloads, folder browsing, status (storage: test_storage.py)."""
 
-import json
 import time
 import types
 
@@ -9,7 +8,7 @@ import pytest
 from aiohttp import web
 
 from Anomalous_TTS import server
-from Anomalous_TTS.core import app_config, browse, characters, downloads, paths
+from Anomalous_TTS.core import app_config, browse, characters, downloads, paths, storage
 
 from test_planner import make_char
 
@@ -18,6 +17,7 @@ from test_planner import make_char
 def fresh(tmp_path, monkeypatch):
     """Empty user directory and only the default library, restored afterwards."""
     monkeypatch.setattr(folder_paths, "get_user_directory", lambda: str(tmp_path / "user"))
+    monkeypatch.setattr(storage, "_job", None)
     registered = folder_paths.folder_names_and_paths[paths.CATEGORY][0]
     saved, saved_sources = list(registered), list(paths._sources)
     registered[:] = [p for p in registered if paths._key(p) == paths._key(paths._default_library())]
@@ -27,46 +27,6 @@ def fresh(tmp_path, monkeypatch):
     registered[:] = saved
     paths._sources[:] = saved_sources
     characters.invalidate()
-
-
-def test_added_library_is_registered_and_remembered(fresh):
-    lib = fresh / "voices"
-    make_char(lib, "阿罗娜")
-    paths.add_library(str(lib))
-    assert any(paths.is_inside(c.folder, str(lib)) for c in characters.scan(max_age=0).values())
-    assert json.loads((fresh / "user" / app_config.FILENAME).read_text(encoding="utf-8"))["libraries"] == [paths.norm(str(lib))]
-
-    # next start: registered again from the config file
-    registered = folder_paths.folder_names_and_paths[paths.CATEGORY][0]
-    registered[:] = registered[:1]
-    paths.register()
-    assert paths.norm(str(lib)) in [paths.norm(p) for p in folder_paths.get_folder_paths(paths.CATEGORY)]
-
-
-def test_remove_library_only_for_folders_added_in_the_ui(fresh):
-    lib, yaml_lib = fresh / "voices", fresh / "yaml_voices"
-    lib.mkdir()
-    yaml_lib.mkdir()
-    folder_paths.add_model_folder_path(paths.CATEGORY, str(yaml_lib))
-    paths.add_library(str(lib))
-    assert {l["source"] for l in paths.libraries()} == {"default", "yaml", "app"}
-
-    with pytest.raises(ValueError):
-        paths.remove_library(str(yaml_lib))
-    with pytest.raises(ValueError):
-        paths.remove_library(paths._default_library())
-    paths.remove_library(str(lib))
-    assert paths.norm(str(lib)) not in [l["path"] for l in paths.libraries()]
-    assert app_config.load()["libraries"] == []
-
-
-def test_add_library_rejects_missing_and_duplicate_folders(fresh):
-    with pytest.raises(ValueError, match="不存在"):
-        paths.add_library(str(fresh / "nope"))
-    (fresh / "voices").mkdir()
-    paths.add_library(str(fresh / "voices"))
-    with pytest.raises(ValueError, match="已经"):
-        paths.add_library(str(fresh / "voices"))
 
 
 def _fake_package(root):
@@ -154,9 +114,10 @@ def test_status_counts_characters_per_library(fresh):
     lib = fresh / "voices"
     make_char(lib, "阿罗娜")
     make_char(lib, "普拉娜")
-    paths.add_library(str(lib))
+    storage.change(str(lib), move=False)
     status = server._status_payload(local=True)
     assert status["format"] == server.API_FORMAT and status["local"] is True
+    assert status["storage"] == paths.norm(str(lib)) and status["move"] is None
     counts = {l["path"]: l["characters"] for l in status["libraries"]}
     assert counts[paths.norm(str(lib))] == 2
     assert [p["id"] for p in status["pretrained"]] == list(paths.PRETRAINED_IDS)

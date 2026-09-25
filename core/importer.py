@@ -82,11 +82,13 @@ _lock = threading.Lock()
 
 
 def _writable_library(folder: Optional[str]) -> str:
+    """``folder`` if it is a writable library; None = the storage place."""
     libs = [lib for lib in paths.libraries() if lib["writable"]]
     if folder is None:
-        if not libs:
-            raise ValueError("没有可以写入的角色库")
-        return libs[0]["path"]
+        home = next((lib for lib in libs if lib["storage"]), libs[0] if libs else None)
+        if home is None:
+            raise ValueError("存放位置不能写入")
+        return home["path"]
     for lib in libs:
         if paths.norm(folder).lower() == lib["path"].lower():
             return lib["path"]

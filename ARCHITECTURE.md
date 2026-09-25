@@ -30,15 +30,16 @@ ComfyUI Python
 用户数据
   角色库（gpt_sovits 模型分类的根目录）  角色文件夹、anomalous_tts.json
   models/gpt_sovits/pretrained/          底模，首次使用或在界面里点下载时下载
-  ComfyUI/user/anomalous_tts.json        在界面里添加的角色库和底模来源
+  ComfyUI/user/anomalous_tts.json        存放位置、以前的存放位置、底模来源
 ```
 
 一次生成：`nodes.py` 扫描角色 → `planner.build_plan` 得到每一句的声音、语言、种子 → `engine` 按声音分批解码，每句的结果按内容缓存 → 拼成一条音频。
 
 ## 模块职责
 
-- `core/paths.py`：角色库（ComfyUI `folder_paths` 的 `gpt_sovits` 分类，加上在界面里添加的）、底模来源、找底模和下载底模。每个底模的查找规则只在这里写一次（`PRETRAINED` 表 + `locate` / `fetch`）。别的模块不自己拼模型路径。
-- `core/app_config.py`：节点自己的设置文件 `ComfyUI/user/anomalous_tts.json`（角色库、底模来源），原子写入。
+- `core/paths.py`：角色库（ComfyUI `folder_paths` 的 `gpt_sovits` 分类，加上存放位置和以前的存放位置）、底模来源、找底模和下载底模。每个底模的查找规则只在这里写一次（`PRETRAINED` 表 + `locate` / `fetch`）。别的模块不自己拼模型路径。
+- `core/app_config.py`：节点自己的设置文件 `ComfyUI/user/anomalous_tts.json`（存放位置、以前的存放位置、底模来源），原子写入。
+- `core/storage.py`：唯一的存放位置，以及改位置时把角色移过去（后台线程，逐个角色，同盘改名、跨盘复制后再删原来的）。
 - `core/downloads.py`：界面发起的底模下载，一个后台线程逐个下载，报告进度和错误；真正的下载仍是 `paths.fetch`。
 - `core/dependencies.py`：每种语言需要的 Python 包和安装命令；引擎报错和准备状态都用它。
 - `core/browse.py`：服务器端的文件夹浏览（浏览器拿不到本机路径），以及按扩展名判断文件种类（`kind_of`）。

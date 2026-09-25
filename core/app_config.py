@@ -1,9 +1,12 @@
 """The node's own settings: ``ComfyUI/user/anomalous_tts.json``.
 
-Folders added from the UI live here instead of ``extra_model_paths.yaml`` so they
+Folders chosen in the UI live here instead of ``extra_model_paths.yaml`` so they
 work without a restart and survive plugin updates::
 
-    {"format": 1, "libraries": ["D:/voices/模型"], "pretrained": ["D:/GPT-SoVITS/GPT_SoVITS"]}
+    {"format": 1, "storage": "D:/voices", "libraries": ["E:/old voices"], "pretrained": ["D:/GPT-SoVITS/GPT_SoVITS"]}
+
+``storage`` is where characters are kept (absent = ``models/gpt_sovits``);
+``libraries`` are earlier storage places that still hold characters.
 """
 
 from __future__ import annotations
@@ -13,7 +16,7 @@ import logging
 import os
 import tempfile
 import threading
-from typing import Dict, List
+from typing import Any, Dict, Optional
 
 import folder_paths
 
@@ -28,7 +31,7 @@ def path() -> str:
     return os.path.join(folder_paths.get_user_directory(), FILENAME)
 
 
-def load() -> Dict[str, List[str]]:
+def load() -> Dict[str, Any]:
     try:
         with open(path(), encoding="utf-8") as f:
             data = json.load(f)
@@ -37,15 +40,17 @@ def load() -> Dict[str, List[str]]:
     except (OSError, ValueError) as e:
         log.warning("[Anomalous_TTS] 读取 %s 失败，按空设置处理：%s", path(), e)
         data = {}
-    return {k: [p for p in data.get(k, []) if isinstance(p, str)] for k in KEYS}
+    out: Dict[str, Any] = {k: [p for p in data.get(k, []) if isinstance(p, str)] for k in KEYS}
+    out["storage"] = data.get("storage") if isinstance(data.get("storage"), str) else None
+    return out
 
 
-def _save(data: Dict[str, List[str]]) -> None:
+def _save(data: Dict[str, Any]) -> None:
     target = path()
     os.makedirs(os.path.dirname(target), exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(target), suffix=".tmp")
     with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump({"format": 1, **data}, f, ensure_ascii=False, indent=2)
+        json.dump({"format": 1, **{k: v for k, v in data.items() if v is not None}}, f, ensure_ascii=False, indent=2)
     os.replace(tmp, target)
 
 
@@ -68,3 +73,11 @@ def remove(key: str, folder: str) -> bool:
         data[key].remove(folder)
         _save(data)
         return True
+
+
+def set_storage(folder: Optional[str]) -> None:
+    """Where characters are kept; None = the default ``models/gpt_sovits``."""
+    with _lock:
+        data = load()
+        data["storage"] = folder
+        _save(data)

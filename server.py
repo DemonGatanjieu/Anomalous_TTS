@@ -9,11 +9,11 @@ from typing import Any, Callable, Dict, List, Optional
 
 from aiohttp import web
 
-from .core import browse, characters, dependencies, downloads, importer, paths, settings
+from .core import browse, characters, dependencies, downloads, importer, paths, settings, storage
 
 log = logging.getLogger("Anomalous_TTS")
 
-API_FORMAT = 3
+API_FORMAT = 4
 LOCAL_ADDRESSES = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 
 
@@ -67,6 +67,8 @@ def _status_payload(local: bool) -> Dict[str, Any]:
     return {
         "format": API_FORMAT,
         "local": local,
+        "storage": paths.storage(),
+        "move": storage.state(),
         "libraries": libraries,
         "pretrained": pretrained,
         "pretrained_sources": paths.pretrained_sources(),
@@ -105,8 +107,8 @@ async def _in_thread(fn: Callable, *args):
         raise web.HTTPBadRequest(text=str(e))
 
 
-def _change_library(folder: str, remove: bool) -> None:
-    (paths.remove_library if remove else paths.add_library)(folder)
+def _forget_library(folder: str) -> None:
+    paths.forget_library(folder)
     characters.invalidate()
 
 
@@ -161,11 +163,20 @@ def register(prompt_server) -> None:
     async def get_status(request):
         return web.json_response(await _in_thread(_status_payload, _is_local(request)))
 
+    @routes.post("/anomalous_tts/storage")
+    async def post_storage(request):
+        _require_local(request)
+        body = await _json_body(request)
+        await _in_thread(storage.change, _path_field(body), bool(body.get("move")))
+        return web.json_response(await _in_thread(_status_payload, True))
+
     @routes.post("/anomalous_tts/libraries")
     async def post_libraries(request):
         _require_local(request)
         body = await _json_body(request)
-        await _in_thread(_change_library, _path_field(body), bool(body.get("remove")))
+        if not body.get("remove"):
+            raise web.HTTPBadRequest(text="只能移除以前的存放位置；换存放位置用 /anomalous_tts/storage")
+        await _in_thread(_forget_library, _path_field(body))
         return web.json_response(await _in_thread(_status_payload, True))
 
     @routes.post("/anomalous_tts/pretrained/source")

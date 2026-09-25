@@ -7,7 +7,10 @@ Character libraries are the roots of ComfyUI's ``gpt_sovits`` model category:
         base_path: D:/voices
         gpt_sovits: characters
 
-and folders added from the UI (core/app_config.py, registered without a restart).
+and folders from the UI (core/app_config.py, registered without a restart): the
+storage place, where imported characters go (default ``models/gpt_sovits``;
+core/storage.py changes it and moves characters), and earlier storage places
+that still hold characters.
 
 Pretrained files are looked up under every library (``<root>/pretrained/<name>``
 or ``<root>/<name>``) and in GPT-SoVITS packages added as pretrained sources
@@ -86,7 +89,7 @@ def _default_library() -> str:
 def register() -> None:
     folder_paths.add_model_folder_path(CATEGORY, _default_library(), is_default=True)
     config = app_config.load()
-    for folder in config["libraries"]:
+    for folder in ([config["storage"]] if config["storage"] else []) + config["libraries"]:
         if os.path.isdir(folder):
             folder_paths.add_model_folder_path(CATEGORY, folder)
         else:
@@ -108,36 +111,57 @@ def default_root() -> str:
     return path
 
 
+def storage() -> str:
+    """Where characters are kept and imported to: the configured place, else ``models/gpt_sovits``."""
+    folder = app_config.load()["storage"]
+    return norm(folder) if folder and os.path.isdir(folder) else norm(_default_library())
+
+
 def libraries() -> List[Dict]:
-    """Every configured library: where it comes from and whether new characters can go there."""
-    added = {_key(p) for p in app_config.load()["libraries"]}
-    default = _key(_default_library())
+    """Every folder searched for characters: where it comes from, and which one is the storage place."""
+    config = app_config.load()
+    added = {_key(p) for p in config["libraries"]}
+    default, current = _key(_default_library()), _key(storage())
+    custom = _key(config["storage"]) if config["storage"] else None
     out = []
     for p in folder_paths.get_folder_paths(CATEGORY):
-        source = "default" if _key(p) == default else "app" if _key(p) in added else "yaml"
+        k = _key(p)
+        source = "default" if k == default else "storage" if k == custom else "app" if k in added else "yaml"
         exists = os.path.isdir(p)
-        out.append({"path": norm(p), "source": source, "exists": exists, "writable": exists and os.access(p, os.W_OK)})
+        out.append({"path": norm(p), "source": source, "storage": k == current, "exists": exists,
+                    "writable": exists and os.access(p, os.W_OK)})
     return out
 
 
-def add_library(folder: str) -> None:
-    folder = norm(folder)
-    if not os.path.isdir(folder):
-        raise ValueError(f"文件夹不存在：{folder}")
-    if any(_key(p) == _key(folder) for p in folder_paths.get_folder_paths(CATEGORY)):
-        raise ValueError(f"已经是角色库了：{folder}")
-    app_config.add("libraries", folder)
-    folder_paths.add_model_folder_path(CATEGORY, folder)
+def same_folder(a: str, b: str) -> bool:
+    return _key(a) == _key(b)
 
 
-def remove_library(folder: str) -> None:
-    """Only folders added from the UI; yaml and the default folder stay."""
-    stored = next((p for p in app_config.load()["libraries"] if _key(p) == _key(folder)), None)
+def is_default_library(folder: str) -> bool:
+    return same_folder(folder, _default_library())
+
+
+def register_folder(folder: str) -> None:
+    """Search ``folder`` for characters from now on (no restart)."""
+    if not any(same_folder(p, folder) for p in folder_paths.get_folder_paths(CATEGORY)):
+        folder_paths.add_model_folder_path(CATEGORY, norm(folder))
+
+
+def keep_library(folder: str) -> None:
+    """Keep reading an earlier storage place that still holds characters."""
+    if not any(same_folder(p, folder) for p in app_config.load()["libraries"]):
+        app_config.add("libraries", norm(folder))
+    register_folder(folder)
+
+
+def forget_library(folder: str) -> None:
+    """Stop reading a place kept by keep_library. Its files are not touched."""
+    stored = next((p for p in app_config.load()["libraries"] if same_folder(p, folder)), None)
     if stored is None:
-        raise ValueError(f"只能移除在界面里添加的角色库：{folder}")
+        raise ValueError(f"只能移除以前的存放位置：{folder}")
     app_config.remove("libraries", stored)
     registered = folder_paths.folder_names_and_paths[CATEGORY][0]
-    registered[:] = [p for p in registered if _key(p) != _key(stored)]
+    registered[:] = [p for p in registered if not same_folder(p, stored)]
 
 
 # ---------- pretrained lookup ----------

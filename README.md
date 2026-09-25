@@ -51,7 +51,7 @@ models/gpt_sovits/
 - 高级参数里的「reference_audio」填角色文件夹里的相对路径（例如 `参考音频/xxx.wav`），留空就自动选。
 - 设置文件格式见 [docs/INTERFACE.md](docs/INTERFACE.md) 第 3 节。
 
-已有的模型不用复制：装了 [Anomalous Model Browser](https://github.com/DemonGatanjieu/Anomalous_Model_Browser) 的话，在它的音频页里添加角色库、指定整合包就行，不用重启。也可以在 `ComfyUI/extra_model_paths.yaml` 里加目录：
+已有的模型不用复制：装了 [Anomalous Model Browser](https://github.com/DemonGatanjieu/Anomalous_Model_Browser) 的话，在它的音频页里导入角色、选存放位置、指定整合包就行，不用重启。也可以在 `ComfyUI/extra_model_paths.yaml` 里加目录：
 
 ```yaml
 anomalous_tts:

@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from Anomalous_TTS.core import characters, importer, paths, settings
+from Anomalous_TTS.core import characters, importer, settings, storage
 
 from test_planner import make_char, wav
 from test_setup import fresh  # noqa: F401  (fixture)
@@ -14,7 +14,7 @@ from test_setup import fresh  # noqa: F401  (fixture)
 def lib(fresh):  # noqa: F811
     folder = fresh / "voices"
     folder.mkdir()
-    paths.add_library(str(folder))
+    storage.change(str(folder), move=False)  # imports go to the storage place
     return folder
 
 
