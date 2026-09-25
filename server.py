@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Any, Callable, Dict, List, Optional
 
 from aiohttp import web
 
-from .core import browse, characters, dependencies, downloads, paths, settings
+from .core import browse, characters, dependencies, downloads, importer, paths, settings
 
 log = logging.getLogger("Anomalous_TTS")
 
@@ -93,9 +94,13 @@ async def _json_body(request: web.Request) -> Dict[str, Any]:
 
 
 async def _in_thread(fn: Callable, *args):
-    """Run disk work off the event loop; ValueError from core becomes 400 with its message."""
+    """Run disk work off the event loop. From core, Conflict becomes 409 (JSON with its data)
+    and ValueError becomes 400, both with the message."""
     try:
         return await asyncio.get_running_loop().run_in_executor(None, fn, *args)
+    except importer.Conflict as e:
+        raise web.HTTPConflict(text=json.dumps({"error": str(e), **e.data}, ensure_ascii=False),
+                               content_type="application/json")
     except ValueError as e:
         raise web.HTTPBadRequest(text=str(e))
 
@@ -182,3 +187,40 @@ def register(prompt_server) -> None:
     async def get_browse(request):
         _require_local(request)
         return web.json_response(await _in_thread(browse.listing, request.query.get("path")))
+
+    @routes.post("/anomalous_tts/import/upload")
+    async def post_import_upload(request):
+        _require_local(request)
+        upload_id = request.query.get("upload")
+        if upload_id is None:
+            body = await _json_body(request)
+            new_id = await _in_thread(importer.start_upload, body.get("name"), body.get("size"), body.get("library"))
+            return web.json_response({"upload": new_id})
+        try:
+            offset = int(request.query.get("offset", ""))
+        except ValueError:
+            raise web.HTTPBadRequest(text="offset 必须是整数")
+        data = await request.read()
+        return web.json_response({"received": await _in_thread(importer.write_chunk, upload_id, offset, data)})
+
+    @routes.post("/anomalous_tts/import/inspect")
+    async def post_import_inspect(request):
+        _require_local(request)
+        body = await _json_body(request)
+        return web.json_response(await _in_thread(importer.inspect, body.get("files")))
+
+    @routes.post("/anomalous_tts/import/commit")
+    async def post_import_commit(request):
+        _require_local(request)
+        body = await _json_body(request)
+        return web.json_response({"ok": True, "character": await _in_thread(importer.commit, body)})
+
+    @routes.post("/anomalous_tts/import/discard")
+    async def post_import_discard(request):
+        _require_local(request)
+        body = await _json_body(request)
+        uploads = body.get("uploads")
+        if not isinstance(uploads, list):
+            raise web.HTTPBadRequest(text="uploads 必须是列表")
+        await _in_thread(importer.discard, uploads)
+        return web.json_response({"ok": True})

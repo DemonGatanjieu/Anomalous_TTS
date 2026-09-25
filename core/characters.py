@@ -71,7 +71,7 @@ def emotion_of(audio_rel: str) -> Optional[str]:
 _list_cache: Dict[Tuple[str, float], Dict[str, Tuple[str, str]]] = {}
 
 
-def _read_list(path: str) -> Dict[str, Tuple[str, str]]:
+def read_list(path: str) -> Dict[str, Tuple[str, str]]:
     """file name (lower case) -> (text, LANG). Empty if the file is not an annotation file."""
     try:
         key = (path, os.path.getmtime(path))
@@ -95,10 +95,29 @@ def _read_list(path: str) -> Dict[str, Tuple[str, str]]:
     return table
 
 
+def find_text(audio_name: str, sidecar: Optional[str], annotations: Iterable[str]) -> Tuple[str, Optional[str]]:
+    """Reference text for one clip: the same-name ``.txt`` (``sidecar``), else the annotation
+    files by file name, then by the name without the emotion part. ("", None) if none."""
+    if sidecar:
+        with open(sidecar, encoding="utf-8-sig") as f:
+            return f.read().strip(), None
+    name, ext = os.path.splitext(audio_name)
+    keys = [(name + ext).lower()]
+    if emotion_of(audio_name):
+        keys.append((name.partition(".")[0] + ext).lower())
+    tables = [read_list(p) for p in annotations]
+    for key in keys:
+        for table in tables:
+            if key in table:
+                text, code = table[key]
+                return text, LIST_LANG_CODES.get(code)
+    return "", None
+
+
 _duration_cache: Dict[Tuple[str, int, int], float] = {}
 
 
-def _seconds(path: str) -> float:
+def audio_seconds(path: str) -> float:
     """Audio length from the file header, cached by path + mtime + size."""
     try:
         st = os.stat(path)
@@ -143,7 +162,7 @@ class Character:
             return lang
         counts: Counter = Counter()
         for rel in self.text_files:
-            for _, code in _read_list(self.abspath(rel)).values():
+            for _, code in read_list(self.abspath(rel)).values():
                 if code in LIST_LANG_CODES:
                     counts[LIST_LANG_CODES[code]] += 1
         return counts.most_common(1)[0][0] if counts else None
@@ -174,20 +193,11 @@ class Character:
         """(text, language or None). Empty text if nothing is found."""
         stem = os.path.splitext(audio_rel)[0]
         sidecar = stem + ".txt"
-        if sidecar in self.text_files:
-            with open(self.abspath(sidecar), encoding="utf-8-sig") as f:
-                return f.read().strip(), None
-        name, ext = os.path.splitext(os.path.basename(audio_rel))
-        keys = [(name + ext).lower()]
-        if emotion_of(audio_rel):
-            keys.append((name.partition(".")[0] + ext).lower())
-        tables = [_read_list(self.abspath(r)) for r in self.text_files if os.path.splitext(r)[0] != stem]
-        for key in keys:
-            for table in tables:
-                if key in table:
-                    text, code = table[key]
-                    return text, LIST_LANG_CODES.get(code)
-        return "", None
+        return find_text(
+            os.path.basename(audio_rel),
+            self.abspath(sidecar) if sidecar in self.text_files else None,
+            [self.abspath(r) for r in self.text_files if os.path.splitext(r)[0] != stem],
+        )
 
     def make_reference(self, audio_rel: str, source: str, spec: Optional[Dict[str, Any]] = None) -> Reference:
         spec = spec or {}
@@ -218,7 +228,7 @@ class Character:
         )
 
         def usable(rel: str) -> bool:
-            return REF_MIN_SEC <= _seconds(self.abspath(rel)) <= REF_MAX_SEC
+            return REF_MIN_SEC <= audio_seconds(self.abspath(rel)) <= REF_MAX_SEC
 
         # Text lookups are cheap; reading audio headers is not (folders can hold ~1000 clips).
         # So only measure clips that have text, and stop at the first usable one.

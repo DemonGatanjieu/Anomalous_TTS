@@ -96,7 +96,9 @@ Anomalous 推送剧本时只需要设置两个输入：
 
 标了 🔒 的接口会读写服务器上的文件，只接受本机的请求（`127.0.0.1` / `::1`），其他电脑访问返回 403。`status.local` 告诉界面当前是不是本机。
 
-旧版节点没有 `/anomalous_tts/status`（404），界面据此隐藏第 5.2 节的功能。
+旧版节点没有 `/anomalous_tts/status`（404），界面据此隐藏第 5.2、5.3 节的功能。
+
+出错时：400 = 请求不对，正文是原因（文字）；409 = 已经存在 / 偏移不对，正文是 JSON `{"error": 原因, …}`；403 = 不是本机。
 
 ### 5.1 角色
 
@@ -207,10 +209,88 @@ Anomalous 推送剧本时只需要设置两个输入：
 - `files` 只列导入能用的：`gpt`（.ckpt）、`sovits`（.pth）、`audio`（.wav/.flac/.ogg/.mp3）、`text`（.txt/.list）。隐藏文件夹不列，不进入符号链接。
 - 文件夹不存在或没有权限返回 400。
 
+### 5.3 导入角色（一律复制）
+
+把 GPT、SoVITS 权重、参考音频、台词文件做成一个角色，或加到已有角色里。分三步：**上传或指定路径 → 检查 → 创建**。浏览器拖进来的文件走上传；用 `browse` 选的文件直接给路径。原文件永远不动。
+
+每个文件在请求里写成 `{"upload": "<上传 id>"}` 或 `{"path": "<服务器上的绝对路径>"}`。只收 `.ckpt`、`.pth`、音频（.wav/.flac/.ogg/.mp3）、`.txt`、`.list`。
+
+#### 🔒 `POST /anomalous_tts/import/upload`
+
+ComfyUI 默认每个请求最大 100MB，权重常常更大，所以分块上传。
+
+- 开始：JSON `{ "name": "ALuoNa-e15.ckpt", "size": 155312957, "library": "D:/voices/模型" }`（`library` 可省略，默认第一个可写的角色库）→ `{ "upload": "<id>" }`。
+- 传块：`POST /anomalous_tts/import/upload?upload=<id>&offset=<字节>`，请求体是这一块的原始字节（建议 8MB 一块）→ `{ "received": <已收字节> }`。`offset` 不等于已收字节时返回 409 `{"error": …, "received": n}`，从 `n` 继续即可。超过声明的 `size` 返回 400。
+- 上传的文件暂存在角色库里的 `.anomalous_tts_staging/`（扫描角色时跳过）。24 小时没动的暂存文件，下次开始上传时清理；节点重启后没用完的上传也会失效。
+
+#### 🔒 `POST /anomalous_tts/import/discard`
+
+`{ "uploads": ["<id>", …] }`：用户取消导入时删掉暂存的上传。→ `{"ok": true}`
+
+#### 🔒 `POST /anomalous_tts/import/inspect`
+
+`{ "files": [ … ] }` → 每个文件的判断，加上界面预填用的建议：
+
+```json
+{
+  "files": [
+    { "ref": 0, "name": "ALuoNa-e15.ckpt", "kind": "gpt", "size": 155312957 },
+    { "ref": 1, "name": "ALuoNa_e16_s224.pth", "kind": "sovits", "size": 85007879, "version": "v2", "supported": true },
+    { "ref": 2, "name": "Arona_Talk_3.wav", "kind": "audio", "size": 460834, "seconds": 5.22,
+      "text": "通常授業！…", "text_source": "list", "language": "ja" },
+    { "ref": 3, "name": "all.txt", "kind": "text", "size": 17278 }
+  ],
+  "suggested": { "name": "ALuoNa", "language": "ja", "reference": 2 },
+  "problems": []
+}
+```
+
+- `ref` 是这个文件在 `files` 里的序号，创建时用它指文件。
+- SoVITS 报告 `version`；v3 / v4 标 `supported: false`。
+- 音频报告 `seconds`；台词按第 3 节的规则从一起给的文件里找（同名 `.txt` → `.list` / 同格式 `.txt` 标注文件），`text_source` 是 `txt`、`list` 或 `null`（没找到，让用户粘贴）。`language` 来自标注文件，没有就按台词判断。
+- `suggested.name` 取自 GPT 文件名（去掉 `-e<轮数>`）；`suggested.reference` 是第一个 3~10 秒且有台词的音频。
+- `problems` 是给用户看的提醒（缺权重、不支持的版本、参考音频不在 3~10 秒）。有提醒也可以继续创建。
+
+#### 🔒 `POST /anomalous_tts/import/commit`
+
+新建角色：
+
+```json
+{
+  "library": "D:/voices/模型",
+  "character": "阿罗娜",
+  "files": [ { "upload": "<id>" }, { "path": "D:/GPT-SoVITS/SoVITS_weights_v2/ALuoNa_e16_s224.pth" }, { "upload": "<id>" } ],
+  "settings": {
+    "aliases": ["阿罗娜"],
+    "language": "ja",
+    "reference": { "file": 2, "text": "通常授業！…", "language": "ja" },
+    "emotions": { "开心": { "file": 3, "text": "…" } }
+  }
+}
+```
+
+加到已有角色：把 `library` + `character` 换成 `"target": "<角色名>"`。`settings` 合并进已有设置：写到的键覆盖，`emotions` 按情绪名合并，没写到的都保留。
+
+- `settings` 就是第 3 节的格式，只是 `reference` / `emotions` 里用 `"file": <序号>` 指文件（`gpt` / `sovits` 也可以写序号），节点换成放好后的相对路径。可以省略。
+- 文件放到：
+
+  ```text
+  <角色库>/<角色名>/
+    GPT_weights/<原文件名>.ckpt
+    SoVITS_weights/<原文件名>.pth
+    参考音频/<原文件名>（音频和 .txt / .list）
+    anomalous_tts.json
+  ```
+
+- 新建角色至少要有一个 `.ckpt` 和一个 `.pth`。`character` 必须是合法的文件夹名，`library` 必须是 `status.libraries` 里 `writable` 的一项。
+- 同名文件夹已存在、或往已有角色里加的文件已存在：409，什么都不改。设置不合格、序号不对：400，什么都不改。
+- 全有或全无：先在暂存区拼好，最后一步才放进角色库；中途失败时角色库保持原样，上传的文件回到暂存区，可以直接重试。
+- 成功 → `{"ok": true, "character": {…单个角色详情…}}`，角色列表同时刷新。
+
 ---
 
 ## 变更记录
 
 - 1（2026-09-24）：初版。
 - 2（2026-09-25）：`/anomalous_tts/characters` 列表只返回摘要（去掉 `gpt` / `sovits` / `audio`，加 `counts`），文件列表改由 `?name=` 取单个角色；加 `?refresh=1`；`format` 改为 2。文件名里只是扩展名的部分（`X.ogg.wav`）不再当作情绪。节点的 `reference_audio` 改为文本框（相对路径）。
-- 3（2026-09-25）：加第 5.2 节（`status`、`libraries`、`pretrained/source`、`pretrained/download`、`browse`）；角色库可以在界面里添加；`POST /settings` 只接受本机请求；`format` 改为 3。
+- 3（2026-09-25）：加第 5.2 节（`status`、`libraries`、`pretrained/source`、`pretrained/download`、`browse`）和第 5.3 节（`import/upload`、`import/discard`、`import/inspect`、`import/commit`）；角色库可以在界面里添加；`POST /settings` 只接受本机请求；`format` 改为 3。

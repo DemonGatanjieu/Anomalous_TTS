@@ -8,7 +8,7 @@
 
 ## 怎么用
 
-1. 把角色模型放进 `ComfyUI/models/gpt_sovits/`（或用 `extra_model_paths.yaml` 指到现有文件夹，见下文）。
+1. 把角色模型放进 `ComfyUI/models/gpt_sovits/`（或用 `extra_model_paths.yaml` 指到现有文件夹，见下文）。装了 Anomalous Model Browser 的话，也可以在它的音频页里直接导入：把 GPT、SoVITS 权重和参考音频拖进去，自动建好角色文件夹。
 2. 添加节点 **角色语音 (GPT-SoVITS)**（分类 `Anomalous/TTS`），选角色，写剧本，接 Save Audio / Preview Audio。
 
 节点上平时只有：角色、剧本、「插入标签」按钮、种子、语速。其他（语言、参考音频、权重、采样参数、批量大小）在「高级参数」里，一般不用动。
