@@ -96,7 +96,8 @@ gpt_sovits_pretrained:
 
 ## 开发
 
-- 代码结构：`core/`（剧本解析 → 规划 → 推理）、`vendor/`（GPT-SoVITS 与 Genie-TTS 的原代码，只通过 `tools/sync_upstream.py` 打补丁）、`nodes.py`（ComfyUI 界面）、`server.py`（HTTP 接口）、`web/`（节点前端）。
+- 代码结构和维护规矩：[ARCHITECTURE.md](ARCHITECTURE.md)。
+- 更新记录：[CHANGELOG.md](CHANGELOG.md)。
 - 测试：见 [tests/README.md](tests/README.md)。
 - 上游代码来源与改动：[UPSTREAM.md](UPSTREAM.md)。
 
