@@ -158,3 +158,35 @@ def test_bad_settings_are_rejected_before_anything_is_written(lib, pkg):
                          "settings": {"language": "fr"}})
     assert not (lib / "阿罗娜").exists()
     assert set(os.listdir(lib)) <= {importer.STAGING}
+
+
+def test_lab_files_and_file_names_give_reference_text(lib, pkg):
+    ref = pkg / "ref"
+    wav(ref / "Lab_clip.wav", 4)
+    (ref / "Lab_clip.lab").write_text("ラボのテキスト", encoding="utf-8")
+    wav(ref / "【开心】先生、おはようございます.wav", 4)
+    wav(ref / "Arona_Talk_9.wav", 4)
+    out = importer.inspect([local(ref / "Lab_clip.wav"), local(ref / "Lab_clip.lab"),
+                            local(ref / "【开心】先生、おはようございます.wav"), local(ref / "Arona_Talk_9.wav")])
+    by_name = {f["name"]: f for f in out["files"]}
+    assert (by_name["Lab_clip.wav"]["text"], by_name["Lab_clip.wav"]["text_source"]) == ("ラボのテキスト", "lab")
+    assert by_name["Lab_clip.lab"]["kind"] == "text"
+    named = by_name["【开心】先生、おはようございます.wav"]
+    assert (named["text"], named["text_source"], named["language"]) == ("先生、おはようございます", "filename", "ja")
+    assert (by_name["Arona_Talk_9.wav"]["text"], by_name["Arona_Talk_9.wav"]["text_source"]) == ("", None)
+
+
+def test_lab_sidecar_is_used_when_generating(lib):
+    folder = make_char(lib, "普拉娜")
+    (folder / "ref" / "a.lab").write_text("ラボ", encoding="utf-8")
+    c = characters.scan(max_age=0)["普拉娜"]
+    assert c.reference_text("ref/a.wav") == ("ラボ", None)
+    assert characters.text_from_filename("ref/b.wav") == ""  # never guessed outside the import form
+
+
+def test_text_from_filename_rules():
+    assert characters.text_from_filename("x/Hello there, teacher!.wav") == "Hello there, teacher!"
+    assert characters.text_from_filename("先生おはよう.开心.wav") == "先生おはよう"
+    assert characters.text_from_filename("[1][快乐]你好啊朋友.wav") == "你好啊朋友"
+    assert characters.text_from_filename("开心.wav") == ""
+    assert characters.text_from_filename("Arona_Academy_Talk_3.wav") == ""

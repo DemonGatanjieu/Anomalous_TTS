@@ -9,7 +9,7 @@ implementation.
   those becomes a character named ``角色/子文件夹``.
 - Settings come from ``anomalous_tts.json`` (core/settings.py), then from the
   file-name convention ``原名.情绪.wav``, then from automatic choices.
-- Reference text: settings → same-name ``.txt`` → GPT-SoVITS annotation files
+- Reference text: settings → same-name ``.txt`` / ``.lab`` → GPT-SoVITS annotation files
   (``.list`` or ``.txt`` with ``path|speaker|LANG|text`` lines), matched by file
   name and then by the name without the emotion part.
 """
@@ -34,6 +34,8 @@ SKIP_DIRS = {"__pycache__", ".git"}
 REF_MIN_SEC = 3.0
 REF_MAX_SEC = 10.0
 LIST_LANG_CODES = {"JA": "ja", "JP": "ja", "ZH": "zh", "EN": "en"}
+SIDECAR_EXTS = (".txt", ".lab")  # a clip's own line, next to it with the same name
+TEXT_EXTS = SIDECAR_EXTS + (".list",)
 _LIST_LINE = re.compile(r"^[^|]+\|[^|]*\|([A-Za-z_]+)\|(.+)$")
 _GPT_EPOCH = re.compile(r"-e(\d+)", re.I)
 _SOVITS_EPOCH = re.compile(r"_e(\d+)(?:_s(\d+))?", re.I)
@@ -96,7 +98,7 @@ def read_list(path: str) -> Dict[str, Tuple[str, str]]:
 
 
 def find_text(audio_name: str, sidecar: Optional[str], annotations: Iterable[str]) -> Tuple[str, Optional[str]]:
-    """Reference text for one clip: the same-name ``.txt`` (``sidecar``), else the annotation
+    """Reference text for one clip: the same-name ``.txt`` / ``.lab`` (``sidecar``), else the annotation
     files by file name, then by the name without the emotion part. ("", None) if none."""
     if sidecar:
         with open(sidecar, encoding="utf-8-sig") as f:
@@ -112,6 +114,26 @@ def find_text(audio_name: str, sidecar: Optional[str], annotations: Iterable[str
                 text, code = table[key]
                 return text, LIST_LANG_CODES.get(code)
     return "", None
+
+
+# Reference packs often name each clip after its line (``【开心】先生、おはよう.wav``).
+_TEXTISH = re.compile(r"[\u3040-\u30ff\u3400-\u9fff]")  # kana, CJK
+_SENTENCE_MARK = re.compile(r"[。！？!?，、,…~～]")
+_LEADING_TAG = re.compile(r"^\s*(?:【[^】]*】|\[[^\]]*\]|（[^）]*）|\([^)]*\))\s*")
+
+
+def text_from_filename(audio_name: str) -> str:
+    """The clip's file name if it reads like a sentence, else "". Only a suggestion for the
+    import form (the user sees and can edit it); generation never guesses from file names."""
+    stem = os.path.splitext(os.path.basename(audio_name))[0]
+    if emotion_of(audio_name):
+        stem = stem.partition(".")[0]
+    while _LEADING_TAG.match(stem):
+        stem = _LEADING_TAG.sub("", stem, count=1)
+    stem = stem.strip()
+    if len(_TEXTISH.findall(stem)) >= 4 or (len(stem) >= 4 and _SENTENCE_MARK.search(stem)):
+        return stem
+    return ""
 
 
 _duration_cache: Dict[Tuple[str, int, int], float] = {}
@@ -192,10 +214,10 @@ class Character:
     def reference_text(self, audio_rel: str) -> Tuple[str, Optional[str]]:
         """(text, language or None). Empty text if nothing is found."""
         stem = os.path.splitext(audio_rel)[0]
-        sidecar = stem + ".txt"
+        sidecar = next((stem + ext for ext in SIDECAR_EXTS if stem + ext in self.text_files), None)
         return find_text(
             os.path.basename(audio_rel),
-            self.abspath(sidecar) if sidecar in self.text_files else None,
+            self.abspath(sidecar) if sidecar else None,
             [self.abspath(r) for r in self.text_files if os.path.splitext(r)[0] != stem],
         )
 
@@ -316,7 +338,7 @@ def _build(name: str, folder: str, files: Iterable[str]) -> Character:
             c.sovits.append(rel)
         elif ext in AUDIO_EXTS:
             c.audio.append(rel)
-        elif ext in (".txt", ".list"):
+        elif ext in TEXT_EXTS:
             c.text_files.append(rel)
     try:
         c.settings = settings_mod.load(folder)

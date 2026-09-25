@@ -121,7 +121,7 @@ def _clean_staging(library: str) -> None:
 def start_upload(name: Any, size: Any, library: Optional[str] = None) -> str:
     name = safe_name(name)
     if not kind_of(name):
-        raise ValueError(f"不支持的文件类型：{name}（只要 .ckpt、.pth、音频、.txt、.list）")
+        raise ValueError(f"不支持的文件类型：{name}（只要 .ckpt、.pth、音频、.txt、.lab、.list）")
     if not isinstance(size, int) or not 0 < size <= MAX_UPLOAD:
         raise ValueError("size 必须是正整数（字节），最大 8GB")
     library = _writable_library(library)
@@ -214,7 +214,8 @@ def _stem_name(sources: List[Source]) -> str:
 
 def inspect(specs: Any) -> Dict[str, Any]:
     sources = _sources(specs)
-    by_stem = {os.path.splitext(s.name)[0]: s for s in sources if s.kind == "text" and s.name.lower().endswith(".txt")}
+    by_stem = {os.path.splitext(s.name)[0]: s for s in sources
+               if s.kind == "text" and os.path.splitext(s.name)[1].lower() in characters.SIDECAR_EXTS}
     annotations = [s.path for s in sources if s.kind == "text"]
     files, problems = [], []
     languages: Counter = Counter()
@@ -237,8 +238,12 @@ def inspect(specs: Any) -> Dict[str, Any]:
             sidecar = by_stem.get(stem)
             text, lang = characters.find_text(
                 s.name, sidecar.path if sidecar else None, [p for p in annotations if not sidecar or p != sidecar.path])
+            source = (os.path.splitext(sidecar.name)[1][1:].lower() if sidecar else "list") if text else None
+            if not text:
+                text = characters.text_from_filename(s.name)
+                source = "filename" if text else None
             item["text"] = text
-            item["text_source"] = ("txt" if sidecar else "list") if text else None
+            item["text_source"] = source
             item["language"] = lang or (detect(text) if text else None)
             if item["language"]:
                 languages[item["language"]] += 1

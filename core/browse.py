@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Dict, Optional
 
-from .characters import AUDIO_EXTS
+from .characters import AUDIO_EXTS, TEXT_EXTS
 from .paths import norm
 
 MAX_ENTRIES = 5000
@@ -19,7 +19,7 @@ def kind_of(name: str) -> Optional[str]:
         return "sovits"
     if ext in AUDIO_EXTS:
         return "audio"
-    if ext in (".txt", ".list"):
+    if ext in TEXT_EXTS:
         return "text"
     return None
 
