@@ -110,6 +110,25 @@ def test_browse_lists_folders_and_usable_files(fresh):
         browse.listing(str(fresh / "nope"))
 
 
+def test_browse_scan_lists_usable_files_with_their_folders(fresh):
+    root = fresh / "pkg"
+    (root / "GPT_weights_v2").mkdir(parents=True)
+    (root / "GPT_weights_v2" / "A-e10.ckpt").write_bytes(b"PK")
+    (root / "voices" / "A" / ".hidden").mkdir(parents=True)
+    (root / "voices" / "A" / "hi.wav").write_bytes(b"x")
+    (root / "voices" / "A" / "notes.docx").write_bytes(b"x")
+    (root / "voices" / "A" / ".hidden" / "x.wav").write_bytes(b"x")
+    deep = root / "1" / "2" / "3" / "4" / "5"
+    deep.mkdir(parents=True)
+    (deep / "too_deep.wav").write_bytes(b"x")
+    out = browse.scan(str(root))
+    assert [(f["dir"], f["name"], f["kind"]) for f in out["files"]] == [
+        ("GPT_weights_v2", "A-e10.ckpt", "gpt"), ("voices/A", "hi.wav", "audio")]
+    assert out["truncated"] is False
+    with pytest.raises(ValueError):
+        browse.scan(str(fresh / "nope"))
+
+
 def test_status_counts_characters_per_library(fresh):
     lib = fresh / "voices"
     make_char(lib, "阿罗娜")

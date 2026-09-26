@@ -92,7 +92,7 @@ Anomalous 推送剧本时只需要设置两个输入：
 
 ## 5. HTTP 接口
 
-都挂在 ComfyUI 服务器上（默认 `http://127.0.0.1:8188`）。所有 JSON 响应都带 `"format": 5`。
+都挂在 ComfyUI 服务器上（默认 `http://127.0.0.1:8188`）。所有 JSON 响应都带 `"format": 6`。
 
 标了 🔒 的接口会读写服务器上的文件，只接受本机的请求（`127.0.0.1` / `::1`），其他电脑访问返回 403。`status.local` 告诉界面当前是不是本机。
 
@@ -159,7 +159,7 @@ Anomalous 推送剧本时只需要设置两个输入：
 
 ```json
 {
-  "format": 5,
+  "format": 6,
   "local": true,
   "storage": "D:/voices",
   "move": { "state": "moving", "from": "…/ComfyUI/models/gpt_sovits", "to": "D:/voices", "total": 29, "done": 3,
@@ -221,6 +221,7 @@ Anomalous 推送剧本时只需要设置两个输入：
 - 不写 `path`：`dirs` 是所有磁盘（Windows）或 `/`，`parent` 为 `null`。`parent` 为 `""` 表示上一级就是磁盘列表。
 - `files` 只列导入能用的：`gpt`（.ckpt）、`sovits`（.pth）、`audio`（.wav/.flac/.ogg/.mp3）、`text`（.txt/.lab/.list）。隐藏文件夹不列，不进入符号链接。
 - 文件夹不存在或没有权限返回 400。
+- 加 `&recursive=1`：一次列出这个文件夹里（往下最多 4 层）所有能用的文件，给批量导入用：`{ "path": "D:/GPT-SoVITS", "files": [{ "path": "D:/GPT-SoVITS/GPT_weights_v2/xxx-e15.ckpt", "name": "xxx-e15.ckpt", "dir": "GPT_weights_v2", "kind": "gpt", "size": 155000000 }], "truncated": false }`。`dir` 是相对这个文件夹的路径（直接在里面的是 `""`）。最多 5000 个文件，超过时 `truncated: true`。
 
 ### 5.3 导入角色（一律复制）
 
@@ -310,3 +311,4 @@ ComfyUI 默认每个请求最大 100MB，权重常常更大，所以分块上传
 - 3（2026-09-25）：加第 5.2 节（`status`、`libraries`、`pretrained/source`、`pretrained/download`、`browse`）和第 5.3 节（`import/upload`、`import/discard`、`import/inspect`、`import/commit`）；角色库可以在界面里添加；`POST /settings` 只接受本机请求；`format` 改为 3。
 - 4（2026-09-25）：只有一个存放位置：加 `POST /anomalous_tts/storage`（可以把角色移过去），`status` 加 `storage`、`move`，`libraries[]` 加 `storage` 字段和 `source: storage`；`POST /anomalous_tts/libraries` 只能移除以前的存放位置，**不能再添加**；上传默认放在存放位置；`format` 改为 4。台词文件也认 `.lab`，导入检查的 `text_source` 加 `lab`、`filename`。
 - 5（2026-09-26）：往已有角色里加文件更宽容：完全一样的文件跳过，标注文件合并新行，只有同名但内容不同的才 409。`import/inspect` 可以带 `target`，文件多 `existing` 字段，并会用角色已有的台词文件找台词；`import/commit` 的结果加 `skipped`、`merged`；`format` 改为 5。
+- 6（2026-09-26）：`browse` 加 `recursive=1`，一次列出文件夹里所有能用的文件（批量导入）；`format` 改为 6。

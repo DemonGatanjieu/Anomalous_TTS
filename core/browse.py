@@ -9,6 +9,7 @@ from .characters import AUDIO_EXTS, TEXT_EXTS
 from .paths import norm
 
 MAX_ENTRIES = 5000
+SCAN_DEPTH = 4  # a GPT-SoVITS package or a voice folder: weights and clips sit a few levels down
 
 
 def kind_of(name: str) -> Optional[str]:
@@ -59,3 +60,31 @@ def listing(path: Optional[str]) -> Dict:
         "files": files,
         "truncated": len(entries) > MAX_ENTRIES,
     }
+
+
+def scan(path: str) -> Dict:
+    """Every usable file under ``path`` (a few levels deep), each with its folder relative to ``path``."""
+    root = os.path.abspath(path or "")
+    if not path or not os.path.isdir(root):
+        raise ValueError(f"文件夹不存在：{norm(root)}")
+    files, truncated = [], False
+    for here, dirs, names in os.walk(root):
+        rel = os.path.relpath(here, root)
+        depth = 0 if rel == "." else rel.count(os.sep) + 1
+        dirs[:] = sorted(d for d in dirs if not _hidden(d)) if depth < SCAN_DEPTH else []
+        for name in sorted(names, key=str.lower):
+            kind = kind_of(name)
+            if not kind or _hidden(name):
+                continue
+            if len(files) >= MAX_ENTRIES:
+                truncated = True
+                break
+            full = os.path.join(here, name)
+            try:
+                size = os.path.getsize(full)
+            except OSError:
+                continue
+            files.append({"path": norm(full), "name": name, "dir": "" if rel == "." else rel.replace(os.sep, "/"), "kind": kind, "size": size})
+        if truncated:
+            break
+    return {"path": norm(root), "files": files, "truncated": truncated}

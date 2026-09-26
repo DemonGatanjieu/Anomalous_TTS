@@ -13,7 +13,7 @@ from .core import browse, characters, dependencies, downloads, importer, paths, 
 
 log = logging.getLogger("Anomalous_TTS")
 
-API_FORMAT = 5
+API_FORMAT = 6
 LOCAL_ADDRESSES = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 
 
@@ -197,6 +197,8 @@ def register(prompt_server) -> None:
     @routes.get("/anomalous_tts/browse")
     async def get_browse(request):
         _require_local(request)
+        if request.query.get("recursive") == "1":
+            return web.json_response(await _in_thread(browse.scan, request.query.get("path")))
         return web.json_response(await _in_thread(browse.listing, request.query.get("path")))
 
     @routes.post("/anomalous_tts/import/upload")
