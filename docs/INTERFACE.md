@@ -1,6 +1,6 @@
 # Anomalous_TTS ↔ Anomalous Model Browser 接口约定
 
-版本：4（2026-09-25）
+版本：9（2026-09-26）
 
 两个项目在不同的对话里开发。这份文档是双方唯一的约定：**Anomalous 只依赖这里写的东西**，其余都是 Anomalous_TTS 的内部实现，可以随时改。
 
@@ -92,7 +92,7 @@ Anomalous 推送剧本时只需要设置两个输入：
 
 ## 5. HTTP 接口
 
-都挂在 ComfyUI 服务器上（默认 `http://127.0.0.1:8188`）。所有 JSON 响应都带 `"format": 7`。
+都挂在 ComfyUI 服务器上（默认 `http://127.0.0.1:8188`）。所有 JSON 响应都带 `"format": 9`。
 
 标了 🔒 的接口会读写服务器上的文件，只接受本机的请求（`127.0.0.1` / `::1`），其他电脑访问返回 403。`status.local` 告诉界面当前是不是本机。
 
@@ -221,13 +221,21 @@ Anomalous 推送剧本时只需要设置两个输入：
 - 不写 `path`：`dirs` 是所有磁盘（Windows）或 `/`，`parent` 为 `null`。`parent` 为 `""` 表示上一级就是磁盘列表。
 - `files` 只列导入能用的：`gpt`（.ckpt）、`sovits`（.pth）、`audio`（.wav/.flac/.ogg/.mp3）、`text`（.txt/.lab/.list）。隐藏文件夹不列，不进入符号链接。
 - 文件夹不存在或没有权限返回 400。
-- 加 `&recursive=1`：一次列出这个文件夹里（往下最多 4 层）所有能用的文件，给批量导入用：`{ "path": "D:/GPT-SoVITS", "files": [{ "path": "D:/GPT-SoVITS/GPT_weights_v2/xxx-e15.ckpt", "name": "xxx-e15.ckpt", "dir": "GPT_weights_v2", "kind": "gpt", "size": 155000000 }], "truncated": false }`。`dir` 是相对这个文件夹的路径（直接在里面的是 `""`）。最多 5000 个文件，超过时 `truncated: true`。不进入 GPT-SoVITS 程序和训练用的文件夹（名字不分大小写）：`runtime`、`GPT_SoVITS`、`pretrained_models`、`logs`、`output`、`TEMP`、`tools`、`__pycache__`、`site-packages`、`venv`、`node_modules`，里面是底模、训练中间存档、数据集切片和工具模型，不是角色文件。
+- 加 `&recursive=1`：一次列出这个文件夹里（往下最多 6 层）所有能用的文件，给批量导入用：`{ "path": "D:/GPT-SoVITS", "files": [{ "path": "D:/GPT-SoVITS/GPT_weights_v2/xxx-e15.ckpt", "name": "xxx-e15.ckpt", "dir": "GPT_weights_v2", "kind": "gpt", "size": 155000000 }], "truncated": false, "skipped": ["GPT_SoVITS", "logs", "output", "runtime"], "too_deep": [] }`。`dir` 是相对这个文件夹的路径（直接在里面的是 `""`）。最多 5000 个文件、走 5000 个文件夹，超过时 `truncated: true`。
+  - 选中的文件夹本身永远会扫描。它下面的文件夹（名字不分大小写）：`runtime`、`pretrained_models`、`__pycache__`、`site-packages`、`venv`、`node_modules` 一律不进入；`GPT_SoVITS`、`logs`、`output`、`TEMP`、`tools` 只在 GPT-SoVITS 整合包里不进入，也就是和它们放在一起的有 `runtime`、`GPT_weights*` / `SoVITS_weights*` 文件夹，或 `webui.py`、`api.py`、`api_v2.py`、`inference_webui.py`、`s1_train.py`、`s2_train.py`。别处同名的文件夹（用户自己的 `output`、按引擎分类的 `GPT_SoVITS`）照常扫描。
+  - `skipped` 是因为上面的规则没进入的文件夹，`too_deep` 是超过层数没进入的文件夹（相对路径，各最多 100 个；隐藏文件夹不算）。界面应该把它们告诉用户，而不是让文件悄悄少掉。
+
+#### 🔒 `GET /anomalous_tts/import/preview?path=<音频文件>`
+
+导入时试听用 `browse` 选的本机音频（浏览器拖进来的文件浏览器自己能放）。只给音频文件（.wav/.flac/.ogg/.mp3）；不存在或不是音频返回 400。
 
 ### 5.3 导入角色（一律复制）
 
 把 GPT、SoVITS 权重、参考音频、台词文件做成一个角色，或加到已有角色里。分三步：**上传或指定路径 → 检查 → 创建**。浏览器拖进来的文件走上传；用 `browse` 选的文件直接给路径。原文件永远不动。
 
 每个文件在请求里写成 `{"upload": "<上传 id>"}` 或 `{"path": "<服务器上的绝对路径>"}`。只收 `.ckpt`、`.pth`、音频（.wav/.flac/.ogg/.mp3）、`.txt`、`.lab`、`.list`。
+
+两种写法都可以另带 `"name"`：这个文件放进角色里用的名字（比如两个情绪文件夹里都有 `01.wav`，一个改成 `难过_01.wav`）。扩展名必须和原文件一样，名字要合法。`inspect` 返回的 `name` 是新名字；台词还是按原文件名在标注文件里找，同名 `.txt` / `.lab` 按新名字配对（一起改名即可）。
 
 #### 🔒 `POST /anomalous_tts/import/upload`
 
@@ -314,3 +322,4 @@ ComfyUI 默认每个请求最大 100MB，权重常常更大，所以分块上传
 - 6（2026-09-26）：`browse` 加 `recursive=1`，一次列出文件夹里所有能用的文件（批量导入）；`format` 改为 6。
 - 7（2026-09-26）：`import/inspect` 的 `problems` 不再包含“还缺 GPT / SoVITS 权重”（界面的待办清单自己显示）；`format` 改为 7。
 - 8（2026-09-26）：`import/inspect` 的 `problems` 不再逐条提醒不在 3~10 秒的音频（界面按 `seconds` 自己处理）；`browse?recursive=1` 不进入 GPT-SoVITS 程序和训练用的文件夹；`format` 改为 8。
+- 9（2026-09-26）：`browse?recursive=1` 的 `output`、`temp`、`tools`、`logs`、`GPT_SoVITS` 只在整合包里跳过，别处照常扫描；`runtime`、`pretrained_models` 一律跳过；最多 6 层；结果加 `skipped`、`too_deep`。导入的文件可以带 `name` 改名。加 `GET /anomalous_tts/import/preview`（试听本机音频）。`format` 改为 9。
