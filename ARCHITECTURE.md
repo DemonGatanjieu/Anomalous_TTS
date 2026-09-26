@@ -42,7 +42,7 @@ ComfyUI Python
 - `core/storage.py`：唯一的存放位置，以及改位置时把角色移过去（后台线程，逐个角色，同盘改名、跨盘复制后再删原来的）。设好的存放位置暂时不存在时照样报告它，导入时新建，不会换成另一个文件夹。
 - `core/downloads.py`：界面发起的底模下载，一个后台线程逐个下载，报告进度和错误；真正的下载仍是 `paths.fetch`。
 - `core/dependencies.py`：每种语言需要的 Python 包和安装命令；引擎报错和准备状态都用它。
-- `core/browse.py`：服务器端的文件夹浏览（浏览器拿不到本机路径），`scan` 一次列出整个文件夹（批量导入用，限深度和数量，不进 GPT-SoVITS 程序和训练用的文件夹），以及按扩展名判断文件种类（`kind_of`）。
+- `core/browse.py`：服务器端的文件夹浏览（浏览器拿不到本机路径），`scan` 一次列出整个文件夹（批量导入用，限深度和数量，不进 GPT-SoVITS 程序和训练用的文件夹，并报告没进去的文件夹），`audio_file` 检查导入试听的本机音频路径，以及按扩展名判断文件种类（`kind_of`）。
 - `core/importer.py`：导入角色：分块上传的暂存、检查（版本、时长、台词）、创建或追加。台词查找复用 `characters.find_text`，设置校验复用 `settings.validate`，不另写一套规则。往已有角色里加时，同样的文件跳过、标注文件追加新行（失败时截回原长度），只有同名不同内容才拒绝。
 - `core/characters.py`：角色发现、默认权重、参考音频和情绪的解析，是 INTERFACE.md 第 2、3 节规则的**唯一实现**。扫描结果缓存 30 秒，`invalidate()` 清空。
 - `core/settings.py`：`anomalous_tts.json` 的读、校验、原子写入；不认识的字段原样保留。

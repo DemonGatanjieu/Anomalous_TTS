@@ -129,6 +129,25 @@ def test_commit_adds_files_to_an_existing_character(lib, pkg):
         importer.commit({"target": "普拉娜", "files": [local(pkg / "other" / "Happy.wav")]})
 
 
+def test_files_can_be_renamed_on_import(lib, pkg):
+    """Two clips both called ``Happy.wav`` (one per emotion folder) go in under different names;
+    lines are still found by the file's own name."""
+    wav(pkg / "sad" / "Happy.wav", 6)
+    files = [local(pkg / "GPT_weights_v2" / "ALuoNa-e15.ckpt"), local(pkg / "SoVITS_weights_v2" / "ALuoNa_e16_s224.pth"),
+             local(pkg / "ref" / "Talk_3.wav"), {**local(pkg / "ref" / "Talk_3.wav"), "name": "ref_Talk_3.wav"},
+             {**upload(pkg / "sad" / "Happy.wav"), "name": "sad_Happy.wav"}, local(pkg / "ref" / "all.list")]
+    out = importer.inspect(files)
+    assert [f["name"] for f in out["files"]][2:5] == ["Talk_3.wav", "ref_Talk_3.wav", "sad_Happy.wav"]
+    assert out["files"][3]["text"] == "通常授業！"  # all.list names Talk_3.wav
+    c = importer.commit({"library": str(lib), "character": "阿罗娜", "files": files[:3] + files[4:],
+                         "settings": {"emotions": {"难过": {"file": 3}}}})
+    assert c["emotions"]["难过"]["audio"] == "参考音频/sad_Happy.wav"
+    assert (lib / "阿罗娜" / "参考音频" / "sad_Happy.wav").is_file()
+    for bad in ("sad.txt", "a/b.wav", ""):
+        with pytest.raises(ValueError):
+            importer.inspect([{**local(pkg / "ref" / "Happy.wav"), "name": bad}])
+
+
 def test_adding_clips_one_by_one_reuses_and_merges_the_annotation_file(lib, pkg):
     # First clip with the package's annotation file: the file is copied once.
     importer.commit({"library": str(lib), "character": "阿罗娜",

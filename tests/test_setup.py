@@ -118,18 +118,60 @@ def test_browse_scan_lists_usable_files_with_their_folders(fresh):
     (root / "voices" / "A" / "hi.wav").write_bytes(b"x")
     (root / "voices" / "A" / "notes.docx").write_bytes(b"x")
     (root / "voices" / "A" / ".hidden" / "x.wav").write_bytes(b"x")
-    deep = root / "1" / "2" / "3" / "4" / "5"
+    deep = root / "1" / "2" / "3" / "4" / "5" / "6" / "7"
     deep.mkdir(parents=True)
+    (deep.parent / "deep_enough.wav").write_bytes(b"x")
     (deep / "too_deep.wav").write_bytes(b"x")
-    for skipped in ("runtime", "GPT_SoVITS/pretrained_models", "logs/A/logs_s2_v2"):  # a whole GPT-SoVITS program
+    for skipped in ("runtime", "GPT_SoVITS/pretrained_models", "logs/A/logs_s2_v2", "output/slicer_opt"):  # a GPT-SoVITS package
         (root / skipped).mkdir(parents=True)
         (root / skipped / "G_2333.pth").write_bytes(b"PK")
     out = browse.scan(str(root))
     assert [(f["dir"], f["name"], f["kind"]) for f in out["files"]] == [
-        ("GPT_weights_v2", "A-e10.ckpt", "gpt"), ("voices/A", "hi.wav", "audio")]
+        ("1/2/3/4/5/6", "deep_enough.wav", "audio"), ("GPT_weights_v2", "A-e10.ckpt", "gpt"), ("voices/A", "hi.wav", "audio")]
     assert out["truncated"] is False
+    assert out["skipped"] == ["GPT_SoVITS", "logs", "output", "runtime"]  # said, not dropped quietly
+    assert out["too_deep"] == ["1/2/3/4/5/6/7"]
     with pytest.raises(ValueError):
         browse.scan(str(fresh / "nope"))
+
+
+def test_browse_scan_skips_program_folder_names_only_inside_a_package(fresh):
+    """A user's own ``output`` or ``GPT_SoVITS`` folder is scanned; the chosen folder always is."""
+    root = fresh / "我的音色"
+    for folder in ("output/派蒙", "GPT_SoVITS/可莉", "temp", "venv"):
+        (root / folder).mkdir(parents=True)
+    (root / "output" / "派蒙" / "a.wav").write_bytes(b"x")
+    (root / "GPT_SoVITS" / "可莉" / "k-e8.ckpt").write_bytes(b"PK")
+    (root / "temp" / "t.wav").write_bytes(b"x")
+    (root / "venv" / "r.wav").write_bytes(b"x")  # Python environments are never voices
+    out = browse.scan(str(root))
+    assert [f["dir"] for f in out["files"]] == ["GPT_SoVITS/可莉", "output/派蒙", "temp"]
+    assert out["skipped"] == ["venv"]
+    assert [f["name"] for f in browse.scan(str(root / "output"))["files"]] == ["a.wav"]
+    assert browse.is_package(["webui.py", "tools"]) and browse.is_package(["SoVITS_weights_v2"])
+    assert not browse.is_package(["GPT_SoVITS", "output"])
+    assert browse.skip_folder("Output", True) and not browse.skip_folder("Output", False)
+
+
+def test_browse_scan_stops_at_the_folder_limit(fresh, monkeypatch):
+    root = fresh / "many"
+    for i in range(4):
+        (root / f"d{i}").mkdir(parents=True)
+        (root / f"d{i}" / "a.wav").write_bytes(b"x")
+    monkeypatch.setattr(browse, "MAX_FOLDERS", 3)
+    out = browse.scan(str(root))
+    assert out["truncated"] is True and len(out["files"]) == 2
+
+
+def test_import_preview_serves_audio_files_only(fresh):
+    clip = fresh / "clips" / "a.wav"
+    clip.parent.mkdir()
+    clip.write_bytes(b"x")
+    (fresh / "clips" / "w.pth").write_bytes(b"PK")
+    assert browse.audio_file(str(clip)) == str(clip)
+    for bad in (str(fresh / "clips" / "w.pth"), str(fresh / "clips" / "nope.wav"), str(fresh / "clips"), ""):
+        with pytest.raises(ValueError):
+            browse.audio_file(bad)
 
 
 def test_status_counts_characters_per_library(fresh):

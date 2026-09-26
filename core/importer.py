@@ -176,10 +176,23 @@ def discard(upload_ids: List[Any]) -> None:
 # ---------- sources: an upload or a local path ----------
 @dataclass
 class Source:
-    name: str
+    name: str  # the name inside the character (``spec["name"]`` when given)
     path: str
     kind: str
     upload: Optional[Upload] = None
+    original: str = ""  # the file's own name: lines in annotation files and file names refer to it
+
+
+def _renamed(source: Source, spec: Dict[str, Any]) -> Source:
+    """Apply ``spec["name"]`` (two clips both called ``01.wav``, say): same kind of file, a new name."""
+    source.original = source.name
+    if spec.get("name") is None:
+        return source
+    name = safe_name(spec["name"])
+    if kind_of(name) != source.kind or os.path.splitext(name)[1].lower() != os.path.splitext(source.name)[1].lower():
+        raise ValueError(f"改名不能换文件类型：{source.name} → {name}")
+    source.name = name
+    return source
 
 
 def _source(spec: Any) -> Source:
@@ -187,7 +200,7 @@ def _source(spec: Any) -> Source:
         up = _upload(spec["upload"])
         if up.received() != up.size:
             raise ValueError(f"{up.name} 还没有上传完")
-        return Source(up.name, up.path, kind_of(up.name), up)
+        return _renamed(Source(up.name, up.path, kind_of(up.name), up), spec)
     if isinstance(spec, dict) and isinstance(spec.get("path"), str):
         path = os.path.abspath(spec["path"])
         if not os.path.isfile(path):
@@ -195,8 +208,8 @@ def _source(spec: Any) -> Source:
         kind = kind_of(path)
         if not kind:
             raise ValueError(f"不支持的文件类型：{os.path.basename(path)}")
-        return Source(os.path.basename(path), path, kind)
-    raise ValueError('files 里的每一项必须是 {"upload": id} 或 {"path": 路径}')
+        return _renamed(Source(os.path.basename(path), path, kind), spec)
+    raise ValueError('files 里的每一项必须是 {"upload": id} 或 {"path": 路径}，可以另带 "name"')
 
 
 def _sources(specs: Any) -> List[Source]:
@@ -277,10 +290,10 @@ def inspect(specs: Any, target: Any = None) -> Dict[str, Any]:
                             if f"{SUBFOLDER['audio']}/{stem}{ext}" in c.text_files), None)
                 sidecar_path = c.abspath(rel) if rel else None
             text, lang = characters.find_text(
-                s.name, sidecar_path, [p for p in annotations if p != sidecar_path])
+                s.original, sidecar_path, [p for p in annotations if p != sidecar_path])
             source = (os.path.splitext(sidecar_path)[1][1:].lower() if sidecar_path else "list") if text else None
             if not text:
-                text = characters.text_from_filename(s.name)
+                text = characters.text_from_filename(s.original)
                 source = "filename" if text else None
             item["text"] = text
             item["text_source"] = source

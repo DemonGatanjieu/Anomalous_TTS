@@ -13,7 +13,7 @@ from .core import browse, characters, dependencies, downloads, importer, paths, 
 
 log = logging.getLogger("Anomalous_TTS")
 
-API_FORMAT = 8
+API_FORMAT = 9
 LOCAL_ADDRESSES = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 
 
@@ -200,6 +200,11 @@ def register(prompt_server) -> None:
         if request.query.get("recursive") == "1":
             return web.json_response(await _in_thread(browse.scan, request.query.get("path")))
         return web.json_response(await _in_thread(browse.listing, request.query.get("path")))
+
+    @routes.get("/anomalous_tts/import/preview")
+    async def get_import_preview(request):
+        _require_local(request)
+        return web.FileResponse(await _in_thread(browse.audio_file, request.query.get("path")))
 
     @routes.post("/anomalous_tts/import/upload")
     async def post_import_upload(request):
