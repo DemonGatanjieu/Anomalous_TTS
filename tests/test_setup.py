@@ -121,6 +121,9 @@ def test_browse_scan_lists_usable_files_with_their_folders(fresh):
     deep = root / "1" / "2" / "3" / "4" / "5"
     deep.mkdir(parents=True)
     (deep / "too_deep.wav").write_bytes(b"x")
+    for skipped in ("runtime", "GPT_SoVITS/pretrained_models", "logs/A/logs_s2_v2"):  # a whole GPT-SoVITS program
+        (root / skipped).mkdir(parents=True)
+        (root / skipped / "G_2333.pth").write_bytes(b"PK")
     out = browse.scan(str(root))
     assert [(f["dir"], f["name"], f["kind"]) for f in out["files"]] == [
         ("GPT_weights_v2", "A-e10.ckpt", "gpt"), ("voices/A", "hi.wav", "audio")]

@@ -221,7 +221,7 @@ Anomalous 推送剧本时只需要设置两个输入：
 - 不写 `path`：`dirs` 是所有磁盘（Windows）或 `/`，`parent` 为 `null`。`parent` 为 `""` 表示上一级就是磁盘列表。
 - `files` 只列导入能用的：`gpt`（.ckpt）、`sovits`（.pth）、`audio`（.wav/.flac/.ogg/.mp3）、`text`（.txt/.lab/.list）。隐藏文件夹不列，不进入符号链接。
 - 文件夹不存在或没有权限返回 400。
-- 加 `&recursive=1`：一次列出这个文件夹里（往下最多 4 层）所有能用的文件，给批量导入用：`{ "path": "D:/GPT-SoVITS", "files": [{ "path": "D:/GPT-SoVITS/GPT_weights_v2/xxx-e15.ckpt", "name": "xxx-e15.ckpt", "dir": "GPT_weights_v2", "kind": "gpt", "size": 155000000 }], "truncated": false }`。`dir` 是相对这个文件夹的路径（直接在里面的是 `""`）。最多 5000 个文件，超过时 `truncated: true`。
+- 加 `&recursive=1`：一次列出这个文件夹里（往下最多 4 层）所有能用的文件，给批量导入用：`{ "path": "D:/GPT-SoVITS", "files": [{ "path": "D:/GPT-SoVITS/GPT_weights_v2/xxx-e15.ckpt", "name": "xxx-e15.ckpt", "dir": "GPT_weights_v2", "kind": "gpt", "size": 155000000 }], "truncated": false }`。`dir` 是相对这个文件夹的路径（直接在里面的是 `""`）。最多 5000 个文件，超过时 `truncated: true`。不进入 GPT-SoVITS 程序和训练用的文件夹（名字不分大小写）：`runtime`、`GPT_SoVITS`、`pretrained_models`、`logs`、`output`、`TEMP`、`tools`、`__pycache__`、`site-packages`、`venv`、`node_modules`，里面是底模、训练中间存档、数据集切片和工具模型，不是角色文件。
 
 ### 5.3 导入角色（一律复制）
 
@@ -264,7 +264,7 @@ ComfyUI 默认每个请求最大 100MB，权重常常更大，所以分块上传
 - 音频报告 `seconds`；台词按第 3 节的规则从一起给的文件里找（同名 `.txt` / `.lab` → `.list` / 同格式 `.txt` 标注文件）；都没有、而文件名读起来像一句话时（至少 4 个汉字或假名，或带句读符号；开头的 `【开心】` 这类标签去掉），用文件名作建议。`text_source` 是 `txt`、`lab`、`list`、`filename` 或 `null`（没找到，让用户粘贴）。`filename` 只是导入时的建议，生成语音时节点从不按文件名猜台词。`language` 来自标注文件，没有就按台词判断。
 - `suggested.name` 取自 GPT 文件名（去掉 `-e<轮数>`）；`suggested.reference` 是第一个 3~10 秒且有台词的音频。
 - 带 `target` 时：每个文件多一个 `existing`，说明角色里同一位置有没有这个文件：`null`（没有，会复制）、`same`（完全一样，会跳过）、`merge`（都是标注文件，新的行会追加进去）、`different`（同名但内容不同，创建时会被拒绝）。台词也会在角色已有的标注文件和同名 `.txt` / `.lab` 里找（一条一条加音频时不用再带标注文件）。
-- `problems` 是给用户看的提醒（不支持的版本、参考音频不在 3~10 秒、同名但内容不同的文件）。缺不缺权重由界面自己按 `kind` 判断，这里不提醒。有提醒也可以继续创建。
+- `problems` 是给用户看的提醒（不支持的版本、同名但内容不同的文件）。缺不缺权重、音频长度合不合适（`seconds` 不在 3~10 秒）由界面自己判断，这里不提醒。有提醒也可以继续创建。
 
 #### 🔒 `POST /anomalous_tts/import/commit`
 
@@ -313,3 +313,4 @@ ComfyUI 默认每个请求最大 100MB，权重常常更大，所以分块上传
 - 5（2026-09-26）：往已有角色里加文件更宽容：完全一样的文件跳过，标注文件合并新行，只有同名但内容不同的才 409。`import/inspect` 可以带 `target`，文件多 `existing` 字段，并会用角色已有的台词文件找台词；`import/commit` 的结果加 `skipped`、`merged`；`format` 改为 5。
 - 6（2026-09-26）：`browse` 加 `recursive=1`，一次列出文件夹里所有能用的文件（批量导入）；`format` 改为 6。
 - 7（2026-09-26）：`import/inspect` 的 `problems` 不再包含“还缺 GPT / SoVITS 权重”（界面的待办清单自己显示）；`format` 改为 7。
+- 8（2026-09-26）：`import/inspect` 的 `problems` 不再逐条提醒不在 3~10 秒的音频（界面按 `seconds` 自己处理）；`browse?recursive=1` 不进入 GPT-SoVITS 程序和训练用的文件夹；`format` 改为 8。

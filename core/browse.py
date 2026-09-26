@@ -10,6 +10,10 @@ from .paths import norm
 
 MAX_ENTRIES = 5000
 SCAN_DEPTH = 4  # a GPT-SoVITS package or a voice folder: weights and clips sit a few levels down
+# Folders of the GPT-SoVITS program and its training runs: base models, training checkpoints,
+# dataset slices and tool models, not a character's files. ``scan`` does not go into them.
+SCAN_SKIP = {"runtime", "gpt_sovits", "pretrained_models", "logs", "output", "temp", "tools",
+             "__pycache__", "site-packages", "venv", "node_modules"}
 
 
 def kind_of(name: str) -> Optional[str]:
@@ -71,7 +75,7 @@ def scan(path: str) -> Dict:
     for here, dirs, names in os.walk(root):
         rel = os.path.relpath(here, root)
         depth = 0 if rel == "." else rel.count(os.sep) + 1
-        dirs[:] = sorted(d for d in dirs if not _hidden(d)) if depth < SCAN_DEPTH else []
+        dirs[:] = sorted(d for d in dirs if not _hidden(d) and d.lower() not in SCAN_SKIP) if depth < SCAN_DEPTH else []
         for name in sorted(names, key=str.lower):
             kind = kind_of(name)
             if not kind or _hidden(name):

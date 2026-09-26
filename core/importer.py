@@ -287,8 +287,6 @@ def inspect(specs: Any, target: Any = None) -> Dict[str, Any]:
             item["language"] = lang or (detect(text) if text else None)
             if item["language"]:
                 languages[item["language"]] += 1
-            if not characters.REF_MIN_SEC <= item["seconds"] <= characters.REF_MAX_SEC:
-                problems.append(f"{s.name} 长 {item['seconds']} 秒，参考音频需要 3~10 秒")
         files.append(item)
     usable = [f for f in files if f["kind"] == "audio" and characters.REF_MIN_SEC <= f["seconds"] <= characters.REF_MAX_SEC]
     reference = next((f["ref"] for f in usable if f["text"]), usable[0]["ref"] if usable else None)

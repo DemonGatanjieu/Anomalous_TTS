@@ -78,7 +78,8 @@ def test_inspect_suggests_name_reference_and_text(lib, pkg):
     assert by_name["New_e8_s80.pth"]["supported"] is False
     assert (by_name["Talk_3.wav"]["text"], by_name["Talk_3.wav"]["text_source"]) == ("通常授業！", "list")
     assert (by_name["Happy.wav"]["text"], by_name["Happy.wav"]["text_source"]) == ("やった！", "txt")
-    assert any("short.wav" in p for p in out["problems"]) and any("v4" in p for p in out["problems"])
+    assert not any("short.wav" in p for p in out["problems"]) and any("v4" in p for p in out["problems"])
+    assert next(f for f in out["files"] if f["name"] == "short.wav")["seconds"] < 3  # the UI leaves it out
 
 
 def test_commit_new_character_copies_files_and_writes_settings(lib, pkg):
