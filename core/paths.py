@@ -97,7 +97,15 @@ def register() -> None:
     _sources[:] = config["pretrained"]
 
 
+def _register_storage() -> None:
+    """A storage place that was missing at startup (unplugged disk) is searched once it is back."""
+    folder = app_config.load()["storage"]
+    if folder and os.path.isdir(folder):
+        register_folder(folder)
+
+
 def roots() -> List[str]:
+    _register_storage()
     try:
         paths = folder_paths.get_folder_paths(CATEGORY)
     except KeyError:
@@ -112,13 +120,16 @@ def default_root() -> str:
 
 
 def storage() -> str:
-    """Where characters are kept and imported to: the configured place, else ``models/gpt_sovits``."""
+    """Where characters are kept and imported to: the configured place (even while it is missing,
+    so nothing is written elsewhere behind the user's back), else ``models/gpt_sovits``."""
     folder = app_config.load()["storage"]
-    return norm(folder) if folder and os.path.isdir(folder) else norm(_default_library())
+    return norm(folder) if folder else norm(_default_library())
 
 
 def libraries() -> List[Dict]:
-    """Every folder searched for characters: where it comes from, and which one is the storage place."""
+    """Every folder searched for characters: where it comes from, and which one is the storage place
+    (listed even while it is missing, then not writable)."""
+    _register_storage()
     config = app_config.load()
     added = {_key(p) for p in config["libraries"]}
     default, current = _key(_default_library()), _key(storage())
@@ -130,6 +141,8 @@ def libraries() -> List[Dict]:
         exists = os.path.isdir(p)
         out.append({"path": norm(p), "source": source, "storage": k == current, "exists": exists,
                     "writable": exists and os.access(p, os.W_OK)})
+    if not any(lib["storage"] for lib in out):
+        out.append({"path": storage(), "source": "storage", "storage": True, "exists": False, "writable": False})
     return out
 
 

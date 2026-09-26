@@ -92,9 +92,9 @@ def _writable_library(folder: Optional[str]) -> str:
     """``folder`` if it is a writable library; None = the storage place."""
     libs = [lib for lib in paths.libraries() if lib["writable"]]
     if folder is None:
-        home = next((lib for lib in libs if lib["storage"]), libs[0] if libs else None)
+        home = next((lib for lib in libs if lib["storage"]), None)
         if home is None:
-            raise ValueError("存放位置不能写入")
+            raise ValueError(f"存放位置不能写入：{paths.storage()}")
         return home["path"]
     for lib in libs:
         if paths.norm(folder).lower() == lib["path"].lower():

@@ -6,7 +6,7 @@ import time
 import folder_paths
 import pytest
 
-from Anomalous_TTS.core import app_config, characters, paths, storage
+from Anomalous_TTS.core import app_config, characters, importer, paths, storage
 
 from test_planner import make_char
 from test_setup import fresh  # noqa: F401  (fixture)
@@ -115,3 +115,17 @@ def test_bad_storage_places_are_refused(fresh):  # noqa: F811
     (place / "inner").mkdir()
     with pytest.raises(ValueError, match="里面"):
         storage.change(str(place / "inner"), move=True)
+
+
+def test_a_missing_storage_place_is_never_swapped_for_another(fresh, tmp_path):
+    place = tmp_path / "usb"
+    place.mkdir()
+    storage.change(str(place), move=False)
+    place.rmdir()  # unplugged
+    assert paths.storage() == paths.norm(str(place))
+    home = next(lib for lib in paths.libraries() if lib["storage"])
+    assert home["exists"] is False and home["writable"] is False
+    with pytest.raises(ValueError, match="存放位置不能写入"):
+        importer.start_upload("a.wav", 10, None)
+    place.mkdir()  # plugged back in: found again without a restart
+    assert next(lib for lib in paths.libraries() if lib["storage"])["writable"] is True
