@@ -119,8 +119,59 @@ def test_commit_adds_files_to_an_existing_character(lib, pkg):
     saved = settings.load(str(lib / "普拉娜"))
     assert saved["aliases"] == ["普拉娜"] and saved["emotions"]["开心"] == {"audio": "参考音频/Happy.wav"}
 
-    with pytest.raises(importer.Conflict):
-        importer.commit({"target": "普拉娜", "files": [local(pkg / "ref" / "Happy.wav")]})
+    # The same file again is skipped; a different file under that name is refused.
+    again = importer.commit_report({"target": "普拉娜", "files": [local(pkg / "ref" / "Happy.wav")]})
+    assert again["skipped"] == ["参考音频/Happy.wav"] and again["merged"] == []
+    wav(pkg / "other" / "Happy.wav", 6)
+    assert importer.inspect([local(pkg / "other" / "Happy.wav")], "普拉娜")["files"][0]["existing"] == "different"
+    with pytest.raises(importer.Conflict, match="内容不同"):
+        importer.commit({"target": "普拉娜", "files": [local(pkg / "other" / "Happy.wav")]})
+
+
+def test_adding_clips_one_by_one_reuses_and_merges_the_annotation_file(lib, pkg):
+    # First clip with the package's annotation file: the file is copied once.
+    importer.commit({"library": str(lib), "character": "阿罗娜",
+                     "files": [local(pkg / "GPT_weights_v2" / "ALuoNa-e15.ckpt"),
+                               local(pkg / "SoVITS_weights_v2" / "ALuoNa_e16_s224.pth"),
+                               local(pkg / "ref" / "Talk_3.wav"), local(pkg / "ref" / "all.list")]})
+    listed = lib / "阿罗娜" / "参考音频" / "all.list"
+
+    # A second clip alone: its line comes from the list the character already has.
+    wav(pkg / "ref" / "Talk_4.wav", 5)
+    (pkg / "ref" / "all.list").write_text("/x/Talk_3.wav|s|JA|通常授業！\n/x/Talk_4.wav|s|JA|おはよう\n", encoding="utf-8")
+    listed.write_text(listed.read_text(encoding="utf-8").replace("\n", "") + "\n/x/Talk_4.wav|s|JA|おはよう\n", encoding="utf-8")
+    out = importer.inspect([local(pkg / "ref" / "Talk_4.wav")], "阿罗娜")
+    assert out["files"][0]["text"] == "おはよう" and out["files"][0]["existing"] is None
+    assert out["problems"] == []  # no weights needed when adding
+
+    # The list again, with one more line: merged, not copied a second time.
+    (pkg / "ref" / "all.list").write_text("/x/Talk_3.wav|s|JA|通常授業！\n/x/Talk_4.wav|s|JA|おはよう\n/x/Talk_5.wav|s|JA|またね\n", encoding="utf-8")
+    assert importer.inspect([local(pkg / "ref" / "all.list")], "阿罗娜")["files"][0]["existing"] == "merge"
+    report = importer.commit_report({"target": "阿罗娜", "files": [local(pkg / "ref" / "Talk_4.wav"), local(pkg / "ref" / "all.list")]})
+    assert report["merged"] == ["参考音频/all.list"]
+    lines = listed.read_text(encoding="utf-8").splitlines()
+    assert lines == ["/x/Talk_3.wav|s|JA|通常授業！", "/x/Talk_4.wav|s|JA|おはよう", "/x/Talk_5.wav|s|JA|またね"]
+    assert sorted(p.name for p in listed.parent.iterdir()) == ["Talk_3.wav", "Talk_4.wav", "all.list"]
+
+
+def test_failed_commit_undoes_merged_lines(lib, pkg, monkeypatch):
+    importer.commit({"library": str(lib), "character": "阿罗娜",
+                     "files": [local(pkg / "GPT_weights_v2" / "ALuoNa-e15.ckpt"),
+                               local(pkg / "SoVITS_weights_v2" / "ALuoNa_e16_s224.pth"),
+                               local(pkg / "ref" / "Talk_3.wav"), local(pkg / "ref" / "all.list")]})
+    listed = lib / "阿罗娜" / "参考音频" / "all.list"
+    before = listed.read_bytes()
+    (pkg / "ref" / "all.list").write_text("/x/Talk_3.wav|s|JA|通常授業！\n/x/Talk_5.wav|s|JA|またね\n", encoding="utf-8")
+
+    def broken_save(folder, data):
+        raise OSError("磁盘满了")
+
+    monkeypatch.setattr(settings, "save", broken_save)
+    with pytest.raises(OSError):
+        importer.commit({"target": "阿罗娜", "files": [local(pkg / "ref" / "all.list"), local(pkg / "ref" / "Happy.wav")],
+                         "settings": {"emotions": {"开心": {"file": 1}}}})
+    assert listed.read_bytes() == before
+    assert not (lib / "阿罗娜" / "参考音频" / "Happy.wav").exists()
 
 
 def test_failed_commit_leaves_the_library_as_it_was(lib, pkg, monkeypatch):

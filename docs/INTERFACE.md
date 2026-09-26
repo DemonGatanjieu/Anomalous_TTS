@@ -92,7 +92,7 @@ Anomalous 推送剧本时只需要设置两个输入：
 
 ## 5. HTTP 接口
 
-都挂在 ComfyUI 服务器上（默认 `http://127.0.0.1:8188`）。所有 JSON 响应都带 `"format": 4`。
+都挂在 ComfyUI 服务器上（默认 `http://127.0.0.1:8188`）。所有 JSON 响应都带 `"format": 5`。
 
 标了 🔒 的接口会读写服务器上的文件，只接受本机的请求（`127.0.0.1` / `::1`），其他电脑访问返回 403。`status.local` 告诉界面当前是不是本机。
 
@@ -159,7 +159,7 @@ Anomalous 推送剧本时只需要设置两个输入：
 
 ```json
 {
-  "format": 4,
+  "format": 5,
   "local": true,
   "storage": "D:/voices",
   "move": { "state": "moving", "from": "…/ComfyUI/models/gpt_sovits", "to": "D:/voices", "total": 29, "done": 3,
@@ -242,7 +242,7 @@ ComfyUI 默认每个请求最大 100MB，权重常常更大，所以分块上传
 
 #### 🔒 `POST /anomalous_tts/import/inspect`
 
-`{ "files": [ … ] }` → 每个文件的判断，加上界面预填用的建议：
+`{ "files": [ … ] }`（往已有角色里加时再带 `"target": "<角色名>"`）→ 每个文件的判断，加上界面预填用的建议：
 
 ```json
 {
@@ -262,7 +262,8 @@ ComfyUI 默认每个请求最大 100MB，权重常常更大，所以分块上传
 - SoVITS 报告 `version`；v3 / v4 标 `supported: false`。
 - 音频报告 `seconds`；台词按第 3 节的规则从一起给的文件里找（同名 `.txt` / `.lab` → `.list` / 同格式 `.txt` 标注文件）；都没有、而文件名读起来像一句话时（至少 4 个汉字或假名，或带句读符号；开头的 `【开心】` 这类标签去掉），用文件名作建议。`text_source` 是 `txt`、`lab`、`list`、`filename` 或 `null`（没找到，让用户粘贴）。`filename` 只是导入时的建议，生成语音时节点从不按文件名猜台词。`language` 来自标注文件，没有就按台词判断。
 - `suggested.name` 取自 GPT 文件名（去掉 `-e<轮数>`）；`suggested.reference` 是第一个 3~10 秒且有台词的音频。
-- `problems` 是给用户看的提醒（缺权重、不支持的版本、参考音频不在 3~10 秒）。有提醒也可以继续创建。
+- 带 `target` 时：每个文件多一个 `existing`，说明角色里同一位置有没有这个文件：`null`（没有，会复制）、`same`（完全一样，会跳过）、`merge`（都是标注文件，新的行会追加进去）、`different`（同名但内容不同，创建时会被拒绝）。台词也会在角色已有的标注文件和同名 `.txt` / `.lab` 里找（一条一条加音频时不用再带标注文件）。不再提醒缺权重。
+- `problems` 是给用户看的提醒（缺权重、不支持的版本、参考音频不在 3~10 秒、同名但内容不同的文件）。有提醒也可以继续创建。
 
 #### 🔒 `POST /anomalous_tts/import/commit`
 
@@ -296,9 +297,9 @@ ComfyUI 默认每个请求最大 100MB，权重常常更大，所以分块上传
   ```
 
 - 新建角色至少要有一个 `.ckpt` 和一个 `.pth`。`character` 必须是合法的文件夹名，`library` 必须是 `status.libraries` 里 `writable` 的一项，通常就是 `status.storage`。
-- 同名文件夹已存在、或往已有角色里加的文件已存在：409，什么都不改。设置不合格、序号不对：400，什么都不改。
+- 同名文件夹已存在：409，什么都不改。往已有角色里加文件时，完全一样的文件跳过，标注文件（`.list` / 同格式 `.txt`）把没有的行追加进去，同名但内容不同的其他文件：409，什么都不改。设置不合格、序号不对：400，什么都不改。
 - 全有或全无：先在暂存区拼好，最后一步才放进角色库；中途失败时角色库保持原样，上传的文件回到暂存区，可以直接重试。
-- 成功 → `{"ok": true, "character": {…单个角色详情…}}`，角色列表同时刷新。
+- 成功 → `{"ok": true, "character": {…单个角色详情…}, "skipped": ["参考音频/a.wav"], "merged": ["参考音频/all.list"]}`（`skipped` / `merged` 是相对路径，新建角色时都是空列表），角色列表同时刷新。
 
 ---
 
@@ -308,3 +309,4 @@ ComfyUI 默认每个请求最大 100MB，权重常常更大，所以分块上传
 - 2（2026-09-25）：`/anomalous_tts/characters` 列表只返回摘要（去掉 `gpt` / `sovits` / `audio`，加 `counts`），文件列表改由 `?name=` 取单个角色；加 `?refresh=1`；`format` 改为 2。文件名里只是扩展名的部分（`X.ogg.wav`）不再当作情绪。节点的 `reference_audio` 改为文本框（相对路径）。
 - 3（2026-09-25）：加第 5.2 节（`status`、`libraries`、`pretrained/source`、`pretrained/download`、`browse`）和第 5.3 节（`import/upload`、`import/discard`、`import/inspect`、`import/commit`）；角色库可以在界面里添加；`POST /settings` 只接受本机请求；`format` 改为 3。
 - 4（2026-09-25）：只有一个存放位置：加 `POST /anomalous_tts/storage`（可以把角色移过去），`status` 加 `storage`、`move`，`libraries[]` 加 `storage` 字段和 `source: storage`；`POST /anomalous_tts/libraries` 只能移除以前的存放位置，**不能再添加**；上传默认放在存放位置；`format` 改为 4。台词文件也认 `.lab`，导入检查的 `text_source` 加 `lab`、`filename`。
+- 5（2026-09-26）：往已有角色里加文件更宽容：完全一样的文件跳过，标注文件合并新行，只有同名但内容不同的才 409。`import/inspect` 可以带 `target`，文件多 `existing` 字段，并会用角色已有的台词文件找台词；`import/commit` 的结果加 `skipped`、`merged`；`format` 改为 5。

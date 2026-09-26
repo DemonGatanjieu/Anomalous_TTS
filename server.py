@@ -13,7 +13,7 @@ from .core import browse, characters, dependencies, downloads, importer, paths, 
 
 log = logging.getLogger("Anomalous_TTS")
 
-API_FORMAT = 4
+API_FORMAT = 5
 LOCAL_ADDRESSES = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 
 
@@ -218,13 +218,13 @@ def register(prompt_server) -> None:
     async def post_import_inspect(request):
         _require_local(request)
         body = await _json_body(request)
-        return web.json_response(await _in_thread(importer.inspect, body.get("files")))
+        return web.json_response(await _in_thread(importer.inspect, body.get("files"), body.get("target")))
 
     @routes.post("/anomalous_tts/import/commit")
     async def post_import_commit(request):
         _require_local(request)
         body = await _json_body(request)
-        return web.json_response({"ok": True, "character": await _in_thread(importer.commit, body)})
+        return web.json_response({"ok": True, **await _in_thread(importer.commit_report, body)})
 
     @routes.post("/anomalous_tts/import/discard")
     async def post_import_discard(request):

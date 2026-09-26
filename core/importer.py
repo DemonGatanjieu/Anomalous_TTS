@@ -8,10 +8,17 @@ them into place instead of copying them a second time.
 Commit is all or nothing: everything is assembled in a work folder first and
 moved into place at the end; on any failure placed files are removed again and
 uploads go back to staging.
+
+Adding to a character is forgiving about files it already has: an identical file
+is skipped, and an annotation file (``.list`` / list-style ``.txt``) with the same
+name gets the new lines appended. Only a different file under the same name is
+refused. Inspect with ``target`` says which case each file is, and also looks up
+lines in the annotation files the character already has.
 """
 
 from __future__ import annotations
 
+import filecmp
 import json
 import os
 import re
@@ -214,15 +221,41 @@ def _stem_name(sources: List[Source]) -> str:
     return ""
 
 
-def inspect(specs: Any) -> Dict[str, Any]:
+def _target(name: Any) -> "characters.Character":
+    c = characters.scan(max_age=0).get(name)
+    if c is None:
+        raise ValueError(f"找不到角色：{name}")
+    return c
+
+
+def _existing(c: "characters.Character", s: Source, rel: str) -> Optional[str]:
+    """How ``s`` meets the character's file at ``rel``: None (not there), same, merge or different."""
+    there = c.abspath(rel)
+    if not os.path.isfile(there):
+        return None
+    if filecmp.cmp(s.path, there, shallow=False):
+        return "same"
+    if s.kind == "text" and characters.read_list(s.path) and characters.read_list(there):
+        return "merge"
+    return "different"
+
+
+def inspect(specs: Any, target: Any = None) -> Dict[str, Any]:
     sources = _sources(specs)
+    c = _target(target) if target is not None else None
     by_stem = {os.path.splitext(s.name)[0]: s for s in sources
                if s.kind == "text" and os.path.splitext(s.name)[1].lower() in characters.SIDECAR_EXTS}
     annotations = [s.path for s in sources if s.kind == "text"]
+    if c is not None:  # lines the character already has (added one clip at a time, say)
+        annotations += [c.abspath(r) for r in c.text_files if characters.read_list(c.abspath(r))]
     files, problems = [], []
     languages: Counter = Counter()
     for i, s in enumerate(sources):
         item: Dict[str, Any] = {"ref": i, "name": s.name, "kind": s.kind, "size": os.path.getsize(s.path)}
+        if c is not None:
+            item["existing"] = _existing(c, s, f"{SUBFOLDER[s.kind]}/{s.name}")
+            if item["existing"] == "different":
+                problems.append(f"角色里已经有同名但内容不同的文件：{s.name}")
         if s.kind == "gpt" and not _is_torch_zip(s.path):
             problems.append(f"{s.name} 看起来不是 GPT-SoVITS 的 GPT 权重")
         elif s.kind == "sovits":
@@ -238,9 +271,14 @@ def inspect(specs: Any) -> Dict[str, Any]:
             item["seconds"] = round(characters.audio_seconds(s.path), 2)
             stem = os.path.splitext(s.name)[0]
             sidecar = by_stem.get(stem)
+            sidecar_path = sidecar.path if sidecar else None
+            if sidecar is None and c is not None:  # a same-name .txt / .lab already in the character
+                rel = next((f"{SUBFOLDER['audio']}/{stem}{ext}" for ext in characters.SIDECAR_EXTS
+                            if f"{SUBFOLDER['audio']}/{stem}{ext}" in c.text_files), None)
+                sidecar_path = c.abspath(rel) if rel else None
             text, lang = characters.find_text(
-                s.name, sidecar.path if sidecar else None, [p for p in annotations if not sidecar or p != sidecar.path])
-            source = (os.path.splitext(sidecar.name)[1][1:].lower() if sidecar else "list") if text else None
+                s.name, sidecar_path, [p for p in annotations if p != sidecar_path])
+            source = (os.path.splitext(sidecar_path)[1][1:].lower() if sidecar_path else "list") if text else None
             if not text:
                 text = characters.text_from_filename(s.name)
                 source = "filename" if text else None
@@ -253,9 +291,9 @@ def inspect(specs: Any) -> Dict[str, Any]:
                 problems.append(f"{s.name} 长 {item['seconds']} 秒，参考音频需要 3~10 秒")
         files.append(item)
     kinds = Counter(s.kind for s in sources)
-    if not kinds["gpt"]:
+    if c is None and not kinds["gpt"]:
         problems.append("还缺 GPT 权重（.ckpt）")
-    if not kinds["sovits"]:
+    if c is None and not kinds["sovits"]:
         problems.append("还缺 SoVITS 权重（.pth）")
     usable = [f for f in files if f["kind"] == "audio" and characters.REF_MIN_SEC <= f["seconds"] <= characters.REF_MAX_SEC]
     reference = next((f["ref"] for f in usable if f["text"]), usable[0]["ref"] if usable else None)
@@ -314,21 +352,41 @@ def _merge(old: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
     return merged
 
 
+def _append_lines(path: str, source: str) -> int:
+    """Append the lines of ``source`` that ``path`` does not have yet. Returns how many."""
+    with open(path, encoding="utf-8-sig") as f:
+        old = f.read()
+    have = {line.strip() for line in old.splitlines() if line.strip()}
+    with open(source, encoding="utf-8-sig") as f:
+        new = [line.strip() for line in f if line.strip() and line.strip() not in have]
+    new = list(dict.fromkeys(new))
+    if new:
+        with open(path, "a", encoding="utf-8", newline="\n") as f:
+            f.write(("" if not old or old.endswith("\n") else "\n") + "\n".join(new) + "\n")
+    return len(new)
+
+
 def commit(body: Dict[str, Any]) -> Dict[str, Any]:
-    """New character (``library`` + ``character``) or files added to one (``target``)."""
+    """New character (``library`` + ``character``) or files added to one (``target``). Returns the character."""
+    return commit_report(body)["character"]
+
+
+def commit_report(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Like ``commit``, plus which files were ``skipped`` (identical) and ``merged`` (annotation lines)."""
     sources = _sources(body.get("files"))
     rels = _placements(sources)
     new_settings = _translate(body.get("settings"), rels)
+    keep: Dict[int, str] = {}  # source index -> "same" | "merge": nothing to copy
 
     if body.get("target") is not None:
-        chars = characters.scan(max_age=0)
-        c = chars.get(body["target"])
-        if c is None:
-            raise ValueError(f"找不到角色：{body['target']}")
+        c = _target(body["target"])
         folder, library = c.folder, _library_of(c.folder)
-        clash = next((r for r in rels if os.path.exists(os.path.join(folder, *r.split("/")))), None)
-        if clash:
-            raise Conflict(f"角色里已经有这个文件：{clash}")
+        for i, (s, rel) in enumerate(zip(sources, rels)):
+            existing = _existing(c, s, rel)
+            if existing == "different":
+                raise Conflict(f"角色里已经有同名但内容不同的文件：{rel}")
+            if existing:
+                keep[i] = existing
         if c.settings_error:
             raise ValueError(f"这个角色的设置文件读不了，先修好它：{c.settings_error}")
         merged = _merge(c.settings, new_settings)
@@ -343,8 +401,11 @@ def commit(body: Dict[str, Any]) -> Dict[str, Any]:
             raise ValueError("新角色至少要有一个 GPT 权重（.ckpt）和一个 SoVITS 权重（.pth）")
         merged = new_settings
         gpt, sovits, audio = [], [], []
-    for s, rel in zip(sources, rels):
-        {"gpt": gpt, "sovits": sovits, "audio": audio}.get(s.kind, []).append(rel)
+    gpt, sovits, audio = list(gpt), list(sovits), list(audio)
+    for i, (s, rel) in enumerate(zip(sources, rels)):
+        files = {"gpt": gpt, "sovits": sovits, "audio": audio}.get(s.kind)
+        if files is not None and i not in keep:
+            files.append(rel)
     problems = settings_mod.validate(merged, gpt, sovits, audio)
     if problems:
         raise ValueError("；".join(problems))
@@ -353,8 +414,11 @@ def commit(body: Dict[str, Any]) -> Dict[str, Any]:
     built = os.path.join(work, "character")
     uploads_now: Dict[int, str] = {}  # source index -> where that upload currently is
     placed: List[str] = []  # files and folders created inside an existing character, in order
+    grown: List[tuple] = []  # (annotation file, size before) for lines appended to it
     try:
         for i, (s, rel) in enumerate(zip(sources, rels)):
+            if i in keep:
+                continue
             dest = os.path.join(built, *rel.split("/"))
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             if s.upload:
@@ -368,6 +432,8 @@ def commit(body: Dict[str, Any]) -> Dict[str, Any]:
             os.rename(built, folder)  # last step: before it, the library is untouched
         else:
             for i, rel in enumerate(rels):
+                if i in keep:
+                    continue
                 final = os.path.join(folder, *rel.split("/"))
                 if not os.path.isdir(os.path.dirname(final)):
                     os.makedirs(os.path.dirname(final))
@@ -376,6 +442,11 @@ def commit(body: Dict[str, Any]) -> Dict[str, Any]:
                 placed.append(final)
                 if i in uploads_now:
                     uploads_now[i] = final
+            for i, how in keep.items():
+                if how == "merge":
+                    there = os.path.join(folder, *rels[i].split("/"))
+                    grown.append((there, os.path.getsize(there)))
+                    _append_lines(there, sources[i].path)
             if new_settings:
                 settings_mod.save(folder, merged)
     except BaseException:
@@ -383,6 +454,9 @@ def commit(body: Dict[str, Any]) -> Dict[str, Any]:
             if os.path.exists(where):
                 os.makedirs(os.path.dirname(sources[i].path), exist_ok=True)
                 shutil.move(where, sources[i].path)
+        for there, size in grown:
+            with open(there, "r+b") as f:
+                f.truncate(size)
         for created in reversed(placed):
             if os.path.isfile(created):
                 os.remove(created)
@@ -396,4 +470,8 @@ def commit(body: Dict[str, Any]) -> Dict[str, Any]:
     found = next((c for c in characters.scan().values() if paths.norm(c.folder).lower() == paths.norm(folder).lower()), None)
     if found is None:
         raise RuntimeError("文件已经放好，但扫描不到这个角色")
-    return found.to_api(detail=True)
+    return {
+        "character": found.to_api(detail=True),
+        "skipped": [rels[i] for i, how in sorted(keep.items()) if how == "same"],
+        "merged": [rels[i] for i, how in sorted(keep.items()) if how == "merge"],
+    }
