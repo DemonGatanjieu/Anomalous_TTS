@@ -290,11 +290,6 @@ def inspect(specs: Any, target: Any = None) -> Dict[str, Any]:
             if not characters.REF_MIN_SEC <= item["seconds"] <= characters.REF_MAX_SEC:
                 problems.append(f"{s.name} 长 {item['seconds']} 秒，参考音频需要 3~10 秒")
         files.append(item)
-    kinds = Counter(s.kind for s in sources)
-    if c is None and not kinds["gpt"]:
-        problems.append("还缺 GPT 权重（.ckpt）")
-    if c is None and not kinds["sovits"]:
-        problems.append("还缺 SoVITS 权重（.pth）")
     usable = [f for f in files if f["kind"] == "audio" and characters.REF_MIN_SEC <= f["seconds"] <= characters.REF_MAX_SEC]
     reference = next((f["ref"] for f in usable if f["text"]), usable[0]["ref"] if usable else None)
     return {
