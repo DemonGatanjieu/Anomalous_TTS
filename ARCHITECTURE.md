@@ -1,6 +1,6 @@
 # Anomalous_TTS 架构
 
-给维护者和 AI 看的入口：模块归谁管、数据怎么走、哪些规矩不能破。用户说明看 [README.md](README.md)，版本记录看 [CHANGELOG.md](CHANGELOG.md)，这两份都不是架构的依据。
+给维护者和 AI 看的入口：模块归谁管、数据怎么走、哪些规矩不能破。“模块职责”一节同时是文件目录：每个源码文件都有一行，找代码先看这里。用户说明看 [README.md](README.md)，版本记录看 [CHANGELOG.md](CHANGELOG.md)，这两份都不是架构的依据。
 
 ## 阅读地图
 
@@ -39,10 +39,10 @@ ComfyUI Python
 
 - `core/paths.py`：角色库（ComfyUI `folder_paths` 的 `gpt_sovits` 分类，加上存放位置和以前的存放位置）、底模来源、找底模和下载底模。每个底模的查找规则只在这里写一次（`PRETRAINED` 表 + `locate` / `fetch`）。别的模块不自己拼模型路径。
 - `core/app_config.py`：节点自己的设置文件 `ComfyUI/user/anomalous_tts.json`（存放位置、以前的存放位置、底模来源），原子写入。
-- `core/storage.py`：唯一的存放位置，以及改位置时把角色移过去（后台线程，逐个角色，同盘改名、跨盘复制后再删原来的）。
+- `core/storage.py`：唯一的存放位置，以及改位置时把角色移过去（后台线程，逐个角色，同盘改名、跨盘复制后再删原来的）。设好的存放位置暂时不存在时照样报告它，导入时新建，不会换成另一个文件夹。
 - `core/downloads.py`：界面发起的底模下载，一个后台线程逐个下载，报告进度和错误；真正的下载仍是 `paths.fetch`。
 - `core/dependencies.py`：每种语言需要的 Python 包和安装命令；引擎报错和准备状态都用它。
-- `core/browse.py`：服务器端的文件夹浏览（浏览器拿不到本机路径），以及按扩展名判断文件种类（`kind_of`）。
+- `core/browse.py`：服务器端的文件夹浏览（浏览器拿不到本机路径），`scan` 一次列出整个文件夹（批量导入用，限深度和数量），以及按扩展名判断文件种类（`kind_of`）。
 - `core/importer.py`：导入角色：分块上传的暂存、检查（版本、时长、台词）、创建或追加。台词查找复用 `characters.find_text`，设置校验复用 `settings.validate`，不另写一套规则。往已有角色里加时，同样的文件跳过、标注文件追加新行（失败时截回原长度），只有同名不同内容才拒绝。
 - `core/characters.py`：角色发现、默认权重、参考音频和情绪的解析，是 INTERFACE.md 第 2、3 节规则的**唯一实现**。扫描结果缓存 30 秒，`invalidate()` 清空。
 - `core/settings.py`：`anomalous_tts.json` 的读、校验、原子写入；不认识的字段原样保留。
@@ -72,6 +72,6 @@ ComfyUI Python
 
 1. 改之前 `git status`，不覆盖已有的改动。
 2. 跑 `python -m pytest tests`；动了前端或引擎，带上 `ANOMALOUS_TTS_ASSETS` 跑需要模型的测试。
-3. 改了模块职责、数据流、接口或存储格式才更新这份文档，更新最小的相关部分；普通修复不写进来。
+3. 改了模块职责、数据流、接口或存储格式才更新这份文档，更新最小的相关部分；普通修复不写进来。**新建、删除、改名、拆分文件都算改了模块职责**，同一次提交里改“模块职责”那一行；`tests/test_architecture_map.py` 会检查每个源码文件都有一行。
 4. 用户能感觉到的变化写进 CHANGELOG.md 的“未发布”。
 5. 验证后本地提交，只包含本次的文件；**没有明确同意不推送**。

@@ -33,6 +33,7 @@ assets/
 | `test_setup.py` | 底模来源、后台下载、文件夹浏览、准备状态、只允许本机写入 |
 | `test_storage.py` | 存放位置：改位置、移过去（同盘 / 跨盘、遇到同名停下）、不移时继续读旧位置 |
 | `test_frontend.py` | 日 / 中 / 英音素与基准一致（基准已和官方 GPT-SoVITS 对过，见 UPSTREAM.md） |
+| `test_architecture_map.py` | 每个源码文件在 ARCHITECTURE.md 里都有一行 |
 | `test_engine.py` | 批量解码与官方逐句解码结果完全相同；批量分组不影响结果；缓存和可复现性 |
 
 改了文字处理并确认和官方一致后，用 `tools/make_frontend_fixtures.py` 重新生成基准。
