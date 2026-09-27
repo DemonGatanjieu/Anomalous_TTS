@@ -33,9 +33,11 @@
    - g2pW 不在导入时加载（上游写死了相对路径并会自动下载），改由 `enable_g2pw(模型目录, 分词器目录)` 按需加载；加载前走上游自带的 pypinyin 分支。
    - 删掉 pypinyin 分支里每次都打印的调试输出。
    - `jieba_fast` 装不上时退回纯 Python 的 `jieba`（70 句测试结果一致）。
-7. `text/tone_sandhi.py`：同上，`jieba_fast` → `jieba` 兜底。
+7. `text/tone_sandhi.py`：
+   - 同上，`jieba_fast` → `jieba` 兜底。
+   - **有意和官方不同**：叠字变轻声只用在真正的叠字上。上游把一个词里任何两个挨着的相同字的第二个读成轻声，jieba 把“银行行长”分成一个词，于是读成 yin2 hang2 hang5 zhang3。现在 3 个字以内的词照旧；4 个字以上的词只有开头两个字相同（好好学习）或 AABB（高高兴兴）才变，“银行行长”“人民民主”这种跨了两个词的不变。
 8. `text/g2pw/onnx_api.py`：`requests`、`opencc` 改为用到时才导入。
-9. `text/english.py`：相对 import；词典路径由 `configure(词典目录, 缓存目录)` 指定；`en_G2p()` 改为首次使用时才创建（上游在导入时就加载词典）。
+9. `text/english.py`：相对 import；词典路径由 `configure(词典目录, 缓存目录)` 指定；`en_G2p()` 改为首次使用时才创建（上游在导入时就加载词典）；词典按 UTF-8 读（上游用系统默认编码，中文 Windows 上是 GBK，第一次生成 `engdict_cache.pickle` 时会报错）。
 10. `eres2net/ERes2NetV2.py`：相对 import。
 
 英语词典里有两个 pickle（`namedict_cache.pickle`，以及上游预生成的 `engdict_cache.pickle`）。本包只从固定版本的 GitHub 地址下载 `namedict_cache.pickle`；`engdict_cache.pickle` 在本地由 `cmudict.rep` 生成，除非目录里已经有（比如用户自己的 GPT-SoVITS 整合包）。
@@ -48,7 +50,7 @@
 
 ### 中文前端对拍结果（2026-09-24）
 
-70 句自编测试句（多音字、数字、日期、电话、儿化、语气词），本包与 GPT-SoVITS 官方 `chinese2.py`（g2pW 模式）音素完全一致，BERT 特征按官方 `get_bert_feature` 计算。
+70 句自编测试句（多音字、数字、日期、电话、儿化、语气词），本包与 GPT-SoVITS 官方 `chinese2.py`（g2pW 模式）音素完全一致，BERT 特征按官方 `get_bert_feature` 计算。上面第 7 条的叠字修改后重新对拍（2026-09-27），基准里的句子仍然全部一致（基准里没有被修改影响的词）。
 
 为什么中文没用 Genie 的前端：Genie 用 g2pM 判断多音字，其中前 50 句里有 16 句和官方不同，而且多是明显读错（"都市"读 dou、"还你"读 hai、"便宜"读 bian、"很长"读 zhang、"一只猫"读 zhi3）。同样 50 句，不用模型的 pypinyin 也只有 11 句不同。模型是用官方 g2pW 前端训练的，所以中文照搬官方。
 g2pW 需要 `opencc`（先把简体转成繁体再判断）。试过用 `zh_normalization/char_convert.py` 的逐字转换代替，会把"了"转成"瞭"读成 liao，不可用。

@@ -149,6 +149,23 @@ p("text/english.py", "_g2p = en_G2p()\n\n\ndef g2p(text):\n",
   "    if _g2p is None:\n"
   "        _g2p = en_G2p()\n")
 
+# --- English dictionaries are UTF-8: upstream opens them with the locale encoding, which
+# fails on Chinese Windows (GBK) the first time the cache is built ---
+p("text/english.py", '    start_line = 49\n    with open(CMU_DICT_PATH) as f:\n',
+  '    start_line = 49\n    with open(CMU_DICT_PATH, encoding="utf-8") as f:\n')
+p("text/english.py", 'def read_dict_new():\n    g2p_dict = {}\n    with open(CMU_DICT_PATH) as f:\n',
+  'def read_dict_new():\n    g2p_dict = {}\n    with open(CMU_DICT_PATH, encoding="utf-8") as f:\n')
+p("text/english.py", '    with open(CMU_DICT_FAST_PATH) as f:\n',
+  '    with open(CMU_DICT_FAST_PATH, encoding="utf-8") as f:\n')
+p("text/english.py", '    with open(CMU_DICT_HOT_PATH) as f:\n',
+  '    with open(CMU_DICT_HOT_PATH, encoding="utf-8") as f:\n')
+
+# --- tone sandhi: the reduplication rule only for whole reduplicated words ---
+# Upstream makes the second of any two same characters in a word neutral, so 银行行长
+# (one jieba word) reads yin2 hang2 hang5 zhang3. See UPSTREAM.md.
+p("text/tone_sandhi.py", '                and word not in self.must_not_neural_tone_words\n            ):\n                finals[j] = finals[j][:-1] + "5"\n',
+  '                and word not in self.must_not_neural_tone_words\n                # Anomalous_TTS: in a word of four or more characters only a leading pair (好好学习) or\n                # AABB (高高兴兴) is reduplication; same characters further in belong to two words\n                # (银行行长, 人民民主) and keep their tones.\n                and (len(word) <= 3 or j == 1 or (j == 3 and word[0] == word[1] and word[2] == word[3]))\n            ):\n                finals[j] = finals[j][:-1] + "5"\n')
+
 # --- speaker verification (v2Pro) ---
 p("eres2net/ERes2NetV2.py", "import pooling_layers as pooling_layers\nfrom fusion import AFF\n",
   "from . import pooling_layers as pooling_layers\nfrom .fusion import AFF\n")

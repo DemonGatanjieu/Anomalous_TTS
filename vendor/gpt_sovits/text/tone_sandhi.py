@@ -503,6 +503,10 @@ class ToneSandhi:
                 and item == word[j - 1]
                 and pos[0] in {"n", "v", "a"}
                 and word not in self.must_not_neural_tone_words
+                # Anomalous_TTS: in a word of four or more characters only a leading pair (好好学习) or
+                # AABB (高高兴兴) is reduplication; same characters further in belong to two words
+                # (银行行长, 人民民主) and keep their tones.
+                and (len(word) <= 3 or j == 1 or (j == 3 and word[0] == word[1] and word[2] == word[3]))
             ):
                 finals[j] = finals[j][:-1] + "5"
         ge_idx = word.find("个")

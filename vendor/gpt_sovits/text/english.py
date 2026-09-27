@@ -132,7 +132,7 @@ def replace_consecutive_punctuation(text):
 def read_dict():
     g2p_dict = {}
     start_line = 49
-    with open(CMU_DICT_PATH) as f:
+    with open(CMU_DICT_PATH, encoding="utf-8") as f:
         line = f.readline()
         line_index = 1
         while line:
@@ -155,7 +155,7 @@ def read_dict():
 
 def read_dict_new():
     g2p_dict = {}
-    with open(CMU_DICT_PATH) as f:
+    with open(CMU_DICT_PATH, encoding="utf-8") as f:
         line = f.readline()
         line_index = 1
         while line:
@@ -168,7 +168,7 @@ def read_dict_new():
             line_index = line_index + 1
             line = f.readline()
 
-    with open(CMU_DICT_FAST_PATH) as f:
+    with open(CMU_DICT_FAST_PATH, encoding="utf-8") as f:
         line = f.readline()
         line_index = 1
         while line:
@@ -186,7 +186,7 @@ def read_dict_new():
 
 
 def hot_reload_hot(g2p_dict):
-    with open(CMU_DICT_HOT_PATH) as f:
+    with open(CMU_DICT_HOT_PATH, encoding="utf-8") as f:
         line = f.readline()
         line_index = 1
         while line:
