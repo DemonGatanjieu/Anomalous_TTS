@@ -110,3 +110,21 @@ def test_api_summary_and_detail(chars):
     assert "audio" not in summary and summary["counts"]["audio"] == 4
     assert set(summary["emotions"]) == {"开心", "平静"} and summary["reference"]["audio"] == "ref/a.wav"
     assert detail["audio"] == c.audio and detail["gpt"] == c.gpt
+
+
+def test_cross_lingual_lines_sample_more_tightly():
+    from types import SimpleNamespace
+
+    from Anomalous_TTS.core.engine import SynthesisParams
+
+    ja_voice = SimpleNamespace(ref_lang="ja")
+    chinese = SimpleNamespace(language="zh", voice=ja_voice)
+    japanese = SimpleNamespace(language="ja", voice=ja_voice)
+    params = SynthesisParams()
+    assert params.for_line(japanese) is params
+    tight = params.for_line(chinese)
+    assert (tight.top_k, tight.temperature, tight.top_p, tight.speed) == (10, 0.8, params.top_p, params.speed)
+    lower = SynthesisParams(top_k=5, temperature=0.6).for_line(chinese)
+    assert (lower.top_k, lower.temperature) == (5, 0.6)  # the user's lower values stay
+    off = SynthesisParams(cross_lingual=False)
+    assert off.for_line(chinese) is off

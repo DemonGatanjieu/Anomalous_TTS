@@ -23,6 +23,7 @@ log = logging.getLogger("Anomalous_TTS")
 
 AUTO = characters.AUTO
 LANGUAGE_CHOICES = {AUTO: AUTO, "日语": "ja", "中文": "zh", "英语": "en"}
+CROSS_LINGUAL_CHOICES = {"自动调整": True, "不调整": False}
 
 _engine: Optional[Engine] = None
 
@@ -132,6 +133,10 @@ class AnomalousTTS_CharacterSpeech:
                 "temperature": ("FLOAT", _adv({"default": 1.0, "min": 0.05, "max": 2.0, "step": 0.05})),
                 "repetition_penalty": ("FLOAT", _adv({"default": 1.35, "min": 1.0, "max": 2.0, "step": 0.05})),
                 "batch_size": ("INT", _adv({"default": 8, "min": 1, "max": 64, "tooltip": "一次同时生成几句。显存不够就调小"})),
+                "cross_lingual": (list(CROSS_LINGUAL_CHOICES), _adv({
+                    "default": "自动调整",
+                    "tooltip": "句子和参考音频不是同一种语言时（比如日语角色说中文），这些句子的 top_k 最多 10、temperature 最多 0.8，更稳；你设得更低时按你的",
+                })),
             }
         }
 
@@ -148,7 +153,7 @@ class AnomalousTTS_CharacterSpeech:
 
     def generate(self, character, text, seed, speed, language=AUTO, reference_audio="", reference_text="",
                  gpt_weights=AUTO, sovits_weights=AUTO, pause_seconds=0.3, top_k=15, top_p=1.0,
-                 temperature=1.0, repetition_penalty=1.35, batch_size=8):
+                 temperature=1.0, repetition_penalty=1.35, batch_size=8, cross_lingual="自动调整"):
         chars = characters.scan(max_age=2.0)
         if character not in chars:
             raise ValueError(f"找不到角色：{character}")
@@ -181,6 +186,7 @@ class AnomalousTTS_CharacterSpeech:
             SynthesisParams(
                 top_k=top_k, top_p=top_p, temperature=temperature, repetition_penalty=repetition_penalty,
                 speed=speed, pause_sec=pause_seconds, batch_size=batch_size,
+                cross_lingual=CROSS_LINGUAL_CHOICES.get(cross_lingual, True),
             ),
             progress=progress,
         )

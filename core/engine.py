@@ -15,7 +15,7 @@ import importlib.util
 import logging
 import os
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -31,6 +31,10 @@ log = logging.getLogger("Anomalous_TTS")
 HZ = 50  # semantic tokens per second
 REF_MIN_SEC = 3.0
 REF_MAX_SEC = 10.0
+# Sampling caps for cross-lingual lines. Measured with a Japanese v2 voice on Chinese lines:
+# no take failed at the defaults either, but these gave the most consistent takes across seeds.
+CROSS_LINGUAL_TOP_K = 10
+CROSS_LINGUAL_TEMPERATURE = 0.8
 AUDIO_CACHE_BYTES = 256 * 1024 * 1024
 
 
@@ -43,9 +47,18 @@ class SynthesisParams:
     speed: float = 1.0
     pause_sec: float = 0.3
     batch_size: int = 8
+    cross_lingual: bool = True  # a line in another language than its reference samples more tightly
 
     def sampling_key(self) -> Tuple:
         return (int(self.top_k), float(self.top_p), float(self.temperature), float(self.repetition_penalty))
+
+    def for_line(self, line: Line) -> "SynthesisParams":
+        """The settings a line is sampled with: capped for a line whose language differs from its
+        reference (a Japanese voice speaking Chinese), so the borrowed voice keeps steadier tones."""
+        if not self.cross_lingual or line.language == line.voice.ref_lang:
+            return self
+        return replace(self, top_k=min(int(self.top_k), CROSS_LINGUAL_TOP_K),
+                       temperature=min(float(self.temperature), CROSS_LINGUAL_TEMPERATURE))
 
 
 @dataclass
@@ -324,7 +337,7 @@ class Engine:
         with self._lock:
             lines = plan.lines
             report = Report(lines=len(lines))
-            keys = [self._line_keys(line, params) for line in lines]
+            keys = [self._line_keys(line, params.for_line(line)) for line in lines]
             audio: Dict[Tuple, Tuple[np.ndarray, int]] = {}
             tokens: Dict[Tuple, torch.Tensor] = {}
             for token_key, audio_key in keys:
@@ -343,13 +356,15 @@ class Engine:
                 if progress:
                     progress(done[0], total)
 
-            groups: Dict[Voice, List[int]] = {}
+            # One batch shares one voice and one set of sampling settings.
+            groups: Dict[Tuple[Voice, Tuple], List[int]] = {}
             for i in need_tokens:
-                groups.setdefault(lines[i].voice, []).append(i)
-            for voice, idxs in groups.items():
+                groups.setdefault((lines[i].voice, params.for_line(lines[i]).sampling_key()), []).append(i)
+            for (voice, _), idxs in groups.items():
                 log.info("[Anomalous_TTS] %s：生成 %d 句", voice.label, len(idxs))
                 self._generate_tokens(
-                    voice, [lines[i] for i in idxs], [keys[i][0] for i in idxs], params, tokens, report, tick
+                    voice, [lines[i] for i in idxs], [keys[i][0] for i in idxs], params.for_line(lines[idxs[0]]),
+                    tokens, report, tick,
                 )
             for i in need_audio:
                 token_key, audio_key = keys[i]
