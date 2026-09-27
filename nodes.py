@@ -37,26 +37,31 @@ def get_engine() -> Engine:
     return _engine
 
 
-def _hook_unload_all_models() -> None:
-    """Let ComfyUI's "Unload models" / "Free model and node cache" also free our models.
+def _hook_free_memory() -> None:
+    """Give our VRAM back when ComfyUI needs it.
 
     Our models are not ComfyUI ModelPatchers, so ComfyUI does not track them. Wrap
-    ``unload_all_models`` (called by the /free endpoint) to drop them as well.
+    ``free_memory``: when ComfyUI asks for more than is free on our device (loading an
+    image model, or "Unload models", which asks for everything), drop our models first.
+    With enough free memory they stay loaded, so the next speech needs no reload.
     """
-    original = mm.unload_all_models
+    original = mm.free_memory
     if getattr(original, "_anomalous_tts", False):
         return
 
-    def unload_all_models(*args, **kwargs):
-        if _engine is not None:
+    def free_memory(memory_required, device, *args, **kwargs):
+        if _engine is not None and _engine.holds_models() and _engine.on(device) \
+                and mm.get_free_memory(device) < memory_required:
+            log.info("[Anomalous_TTS] 显存不够，先让出 GPT-SoVITS 模型（下次生成语音时重新加载）")
             _engine.unload()
-        return original(*args, **kwargs)
+            mm.soft_empty_cache()
+        return original(memory_required, device, *args, **kwargs)
 
-    unload_all_models._anomalous_tts = True
-    mm.unload_all_models = unload_all_models
+    free_memory._anomalous_tts = True
+    mm.free_memory = free_memory
 
 
-_hook_unload_all_models()
+_hook_free_memory()
 
 
 def _adv(options: dict) -> dict:

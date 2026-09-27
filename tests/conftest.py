@@ -44,7 +44,9 @@ def _stub_comfy():
         mm.get_torch_device = lambda: torch.device("cpu")
         mm.should_use_fp16 = lambda *a, **k: False
         mm.throw_exception_if_processing_interrupted = lambda: None
-        mm.unload_all_models = lambda: None
+        mm.free_memory = lambda memory_required, device, *a, **k: None
+        mm.get_free_memory = lambda dev=None, torch_free_too=False: 8 * 1024 ** 3
+        mm.soft_empty_cache = lambda *a, **k: None
         utils = types.ModuleType("comfy.utils")
 
         class ProgressBar:

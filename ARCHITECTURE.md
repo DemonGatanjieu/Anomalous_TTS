@@ -49,7 +49,7 @@ ComfyUI Python
 - `core/script.py`、`core/langdetect.py`：剧本语法、按句判断语言。
 - `core/planner.py`：把剧本变成 `Plan`。每个 `Line` 带齐引擎需要的全部信息，引擎不再回头看角色或设置。
 - `core/engine.py`：推理流程和每句缓存。`core/t2s_batch.py` 是批量 GPT 解码（每句独立随机数），`core/models.py` 是模型加载和 LRU，`core/checkpoints.py` 安全加载权重（`weights_only=True`）并识别版本，`core/text_frontend.py` 是文字 → 音素和 BERT 特征，`core/audio.py` 是读取、重采样、静音。
-- `nodes.py`：只放控件定义和胶水代码。
+- `nodes.py`：只放控件定义和胶水代码。我们的模型不是 ComfyUI 的 ModelPatcher，所以这里包了一层 `comfy.model_management.free_memory`：ComfyUI 要的显存比空余的多时（加载图像模型、点“卸载模型”），先卸掉我们的模型；显存够时留着。
 - `server.py`：路由和响应拼装。耗时的扫描和磁盘操作放进 `run_in_executor`；读写文件的接口先过 `_require_local`。
 - `web/anomalous_tts.js`：节点界面。辅助按钮必须加在所有真实输入之后（ComfyUI 按位置保存控件值）。
 

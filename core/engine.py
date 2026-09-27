@@ -140,8 +140,15 @@ class Engine:
             self._sv = model.to(device=self.device, dtype=self.dtype).eval()
         return self._sv
 
+    def holds_models(self) -> bool:
+        return bool(self._gpt or self._sovits or self._hubert or self._roberta or self._sv)
+
+    def on(self, device) -> bool:
+        """Whether ``device`` (a ComfyUI device, or None for all) is the one our models are on."""
+        return device is None or torch.device(device).type == self.device.type
+
     def unload(self) -> None:
-        """Free models (called by ComfyUI's "unload models"). Sentence caches are kept: they are small."""
+        """Free models (when ComfyUI needs the memory). Sentence caches are kept: they are small."""
         with self._lock:
             self._hubert = self._roberta = self._sv = None
             self._gpt.clear()
