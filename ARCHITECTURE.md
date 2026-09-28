@@ -9,6 +9,7 @@
 | 节点输入、HTTP 接口、角色文件夹规则、设置文件、剧本语法 | [docs/INTERFACE.md](docs/INTERFACE.md)（和 Anomalous 的唯一约定） |
 | `vendor/` 里的上游代码、对拍记录 | [UPSTREAM.md](UPSTREAM.md) |
 | 测试、需要模型的测试怎么准备 | [tests/README.md](tests/README.md) |
+| 替用户调一个角色（读音、参考音频），给 AI 助手的步骤 | [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md) |
 
 ## 整体结构
 
