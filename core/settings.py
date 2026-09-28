@@ -13,6 +13,14 @@ from typing import Any, Dict, Iterable, List
 FILENAME = "anomalous_tts.json"
 FORMAT = 1
 LANGS = {"ja", "zh", "en"}
+# `defaults` numbers: the node's own input ranges (nodes.py), so a saved value is always usable.
+DEFAULT_RANGES = {
+    "speed": (0.5, 2.0),
+    "top_k": (1, 100),
+    "top_p": (0.05, 1.0),
+    "temperature": (0.05, 2.0),
+    "repetition_penalty": (1.0, 2.0),
+}
 
 
 class SettingsError(ValueError):
@@ -70,9 +78,13 @@ def validate(data: Any, gpt: Iterable[str], sovits: Iterable[str], audio: Iterab
     else:
         if "language" in defaults and defaults["language"] not in LANGS | {"auto"}:
             errors.append("defaults.language 只能是 auto / ja / zh / en")
-        speed = defaults.get("speed", 1.0)
-        if isinstance(speed, bool) or not isinstance(speed, (int, float)) or not 0.5 <= speed <= 2.0:
-            errors.append("defaults.speed 必须是 0.5~2.0 的数")
+        for key, (low, high) in DEFAULT_RANGES.items():
+            if key not in defaults:
+                continue
+            value = defaults[key]
+            number = int if key == "top_k" else (int, float)
+            if isinstance(value, bool) or not isinstance(value, number) or not low <= value <= high:
+                errors.append(f"defaults.{key} 必须是 {low}~{high} 的{'整数' if key == 'top_k' else '数'}")
     replace = data.get("replace", {})
     if not isinstance(replace, dict) or not all(
         isinstance(k, str) and k.strip() and isinstance(v, str) for k, v in replace.items()

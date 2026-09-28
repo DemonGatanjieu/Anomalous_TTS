@@ -32,4 +32,7 @@ def test_validate_defaults():
     assert settings.validate({"defaults": {"language": "zh", "speed": 1.1}}, [], [], []) == []
     assert settings.validate({"defaults": {"language": "auto"}}, [], [], []) == []
     assert len(settings.validate({"defaults": {"language": "ko", "speed": 3}}, [], [], [])) == 2
+    good = {"top_k": 10, "top_p": 0.9, "temperature": 0.8, "repetition_penalty": 1.3}
+    assert settings.validate({"defaults": good}, [], [], []) == []
+    assert len(settings.validate({"defaults": {"top_k": 1.5, "top_p": 0, "temperature": 3, "repetition_penalty": True}}, [], [], [])) == 4
     assert settings.validate({"defaults": []}, [], [], [])
