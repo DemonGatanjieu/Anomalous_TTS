@@ -25,3 +25,10 @@ def test_empty_parts_dropped_like_anomalous():
 
 def test_braces_without_content_are_text():
     assert tokenize("{}") == [Text("{}")]
+
+
+def test_take_tags():
+    from Anomalous_TTS.core.script import Take
+    assert tokenize("{开心}[take:3]好的。") == [Emotion("开心"), Take(3), Text("好的。")]
+    assert tokenize("[版本：2]好的。") == [Take(2), Text("好的。")]
+    assert tokenize("[take:0]好的。")[0] == Take(1)

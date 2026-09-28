@@ -161,3 +161,16 @@ def test_replace_table_changes_what_the_voice_reads(tmp_path):
     plan = build_plan(chars, NodeOptions(character="阿罗娜", language="zh"), "打开C站找LoRA插件。[普拉娜]C站。")
     # longest match first and one pass: "插件" -> "这个插件" is not replaced again; only 阿罗娜 has a table
     assert [line.text for line in plan.lines] == ["打开西站找萝拉这个插件。", "C站。"]
+
+
+def test_a_take_changes_only_its_own_line(chars):
+    def seeds(text):
+        return [line.seed for line in build_plan(chars, NodeOptions(character="阿罗娜/日配", seed=7), text).lines]
+
+    base = seeds("一行目です。\n{开心}二行目です。\n三行目です。")
+    assert seeds("[take:1]一行目です。\n{开心}二行目です。\n三行目です。") == base
+    retake = seeds("一行目です。\n{开心}[take:2]二行目です。\n三行目です。")
+    assert retake[0] == base[0] and retake[2] == base[2] and retake[1] != base[1]
+    # a take ends at the line break even without a following tag
+    assert seeds("[take:2]一行目です。\n二行目です。")[1] == seeds("一行目です。\n二行目です。")[1]
+    assert seeds("[take:2]一行目です。\n二行目です。")[0] != seeds("一行目です。\n二行目です。")[0]

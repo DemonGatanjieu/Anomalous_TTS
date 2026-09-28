@@ -64,6 +64,15 @@ def validate(data: Any, gpt: Iterable[str], sovits: Iterable[str], audio: Iterab
         errors.append(f"sovits 不是这个角色文件夹里的 .pth：{data['sovits']}")
     if "reference" in data:
         _check_ref("reference", data["reference"], audio, errors)
+    defaults = data.get("defaults", {})
+    if not isinstance(defaults, dict):
+        errors.append("defaults 必须是对象")
+    else:
+        if "language" in defaults and defaults["language"] not in LANGS | {"auto"}:
+            errors.append("defaults.language 只能是 auto / ja / zh / en")
+        speed = defaults.get("speed", 1.0)
+        if isinstance(speed, bool) or not isinstance(speed, (int, float)) or not 0.5 <= speed <= 2.0:
+            errors.append("defaults.speed 必须是 0.5~2.0 的数")
     replace = data.get("replace", {})
     if not isinstance(replace, dict) or not all(
         isinstance(k, str) and k.strip() and isinstance(v, str) for k, v in replace.items()

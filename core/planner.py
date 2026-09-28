@@ -65,9 +65,12 @@ class NodeOptions:
     seed: int = 0
 
 
-def line_seed(seed: int, speaker: str, emotion: str, text: str, occurrence: int) -> int:
-    """Depends only on the node seed and the line itself, so editing one line keeps the others."""
-    digest = hashlib.sha256(f"{seed}|{speaker}|{emotion}|{text}|{occurrence}".encode("utf-8")).digest()
+def line_seed(seed: int, speaker: str, emotion: str, text: str, occurrence: int, take: int = 1) -> int:
+    """Depends only on the node seed and the line itself, so editing one line keeps the others.
+    ``take`` > 1 ([take:N]) gives the line another voice without touching the other lines;
+    take 1 keeps the seeds scripts had before takes existed."""
+    key = f"{seed}|{speaker}|{emotion}|{text}|{occurrence}" + (f"|take{take}" if take > 1 else "")
+    digest = hashlib.sha256(key.encode("utf-8")).digest()
     return int.from_bytes(digest[:8], "big") & 0x7FFFFFFFFFFFFFFF
 
 
@@ -90,6 +93,7 @@ class _Builder:
         self.emotion = MAIN
         self.pending_speaker: Optional[str] = None
         self.last_lang: Optional[str] = None
+        self.take = 1  # [take:N] until the end of its line or the next tag
 
     def warn(self, message: str) -> None:
         if message not in self.plan.warnings:
@@ -160,6 +164,17 @@ class _Builder:
         self.emotion = MAIN
 
     def text(self, text: str) -> None:
+        if self.take > 1:
+            text = text.lstrip("\n")
+            head, _, rest = text.partition("\n")
+            self.sentences(head)
+            self.take = 1
+            if rest.strip():
+                self.sentences(rest)
+            return
+        self.sentences(text)
+
+    def sentences(self, text: str) -> None:
         self.resolve_pending_speaker(text)
         for sentence in split_sentences(self.speaker.respell(text)):
             lang = self.language_of(sentence)
@@ -168,13 +183,17 @@ class _Builder:
             key = (self.speaker.name, self.emotion, sentence)
             occurrence = self.counts[key]
             self.counts[key] += 1
-            seed = line_seed(self.opts.seed, self.speaker.name, self.emotion, sentence, occurrence)
+            seed = line_seed(self.opts.seed, self.speaker.name, self.emotion, sentence, occurrence, self.take)
             self.plan.items.append(Line(voice, sentence, lang, seed))
 
     def build(self, text: str) -> Plan:
         for token in script.tokenize(text):
+            if not isinstance(token, (script.Text, script.Take)):
+                self.take = 1  # a take covers only the text right after it
             if isinstance(token, script.Text):
                 self.text(token.text)
+            elif isinstance(token, script.Take):
+                self.take = token.number
             elif isinstance(token, script.Emotion):
                 self.resolve_pending_speaker(None)
                 self.emotion = token.name

@@ -6,6 +6,7 @@ Tokens, in order:
 - ``{情绪}``           -> Emotion("情绪"); ``{main}`` switches back.
 - ``[名字]``            -> Speaker("名字")
 - ``[pause:1.5]``, ``[pause:500ms]``, ``[停顿:1s]``, ``[wait:2]`` -> Pause(seconds)
+- ``[take:2]``, ``[版本:2]`` -> Take(2): another take of the text up to the next line break or tag
 - anything else        -> Text
 
 The ``{...}`` rule matches Anomalous ``parseTaggedSpeech`` and ComfyUI-F5-TTS.
@@ -24,6 +25,7 @@ MAIN = "main"
 
 _TOKEN = re.compile(r"\{([^{}\[\]]+)\}|\[([^\[\]{}]+)\]")
 _PAUSE = re.compile(r"^\s*(?:pause|wait|stop|停顿|暂停)\s*[:：]\s*([0-9]*\.?[0-9]+)\s*(ms|s|秒)?\s*$", re.I)
+_TAKE = re.compile(r"^\s*(?:take|版本)\s*[:：]\s*([0-9]{1,6})\s*$", re.I)
 MAX_PAUSE_SEC = 30.0
 
 
@@ -47,7 +49,12 @@ class Pause:
     seconds: float
 
 
-Token = Union[Text, Emotion, Speaker, Pause]
+@dataclass(frozen=True)
+class Take:
+    number: int  # 1 = the usual take
+
+
+Token = Union[Text, Emotion, Speaker, Pause, Take]
 
 
 def _bracket(content: str) -> Token:
@@ -57,6 +64,9 @@ def _bracket(content: str) -> Token:
         if (m.group(2) or "").lower() == "ms":
             value /= 1000.0
         return Pause(min(value, MAX_PAUSE_SEC))
+    m = _TAKE.match(content)
+    if m:
+        return Take(max(1, int(m.group(1))))
     return Speaker(content.strip())
 
 

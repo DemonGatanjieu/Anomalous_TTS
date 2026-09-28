@@ -26,3 +26,10 @@ def test_validate_replace_table():
     assert settings.validate({"replace": {"C站": "西站", "插件": ""}}, [], [], []) == []
     assert settings.validate({"replace": {" ": "x"}}, [], [], [])
     assert settings.validate({"replace": ["C站"]}, [], [], [])
+
+
+def test_validate_defaults():
+    assert settings.validate({"defaults": {"language": "zh", "speed": 1.1}}, [], [], []) == []
+    assert settings.validate({"defaults": {"language": "auto"}}, [], [], []) == []
+    assert len(settings.validate({"defaults": {"language": "ko", "speed": 3}}, [], [], [])) == 2
+    assert settings.validate({"defaults": []}, [], [], [])

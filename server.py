@@ -13,7 +13,7 @@ from .core import browse, characters, dependencies, downloads, importer, paths, 
 
 log = logging.getLogger("Anomalous_TTS")
 
-API_FORMAT = 10
+API_FORMAT = 11
 LOCAL_ADDRESSES = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 
 
