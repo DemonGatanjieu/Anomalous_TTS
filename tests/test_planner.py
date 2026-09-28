@@ -128,3 +128,36 @@ def test_cross_lingual_lines_sample_more_tightly():
     assert (lower.top_k, lower.temperature) == (5, 0.6)  # the user's lower values stay
     off = SynthesisParams(cross_lingual=False)
     assert off.for_line(chinese) is off
+
+
+def test_line_endings_give_the_tone():
+    assert characters.tone_of("これって、問題だと思わない？") == 2
+    assert characters.tone_of("本当?」") == 2
+    assert characters.tone_of("やった！…") == 1
+    assert characters.tone_of("アルバイトでもしようかな。") == 0
+    assert characters.tone_of("") == 0
+
+
+def test_automatic_reference_prefers_a_calm_statement(tmp_path):
+    """A question as the main reference makes every sentence end rising (feedback: 桃井)."""
+    root = tmp_path / "gpt_sovits"
+    folder = make_char(root, "桃井", "JA")
+    wav(folder / "ref" / "calm_long.wav", 9.5)
+    wav(folder / "ref" / "calm.wav", 6)
+    lines = {"a": "これって、問題だと思わない？", "b": "やった！", "calm_long": "アルバイトでもしようかな。",
+             "calm": "アルバイトでもしようかな。"}
+    (folder / "all.list").write_text("".join(f"/x/{k}.wav|s|JA|{v}\n" for k, v in lines.items()), encoding="utf-8")
+    assert characters.discover([str(root)])["桃井"].default_reference().audio == "ref/calm.wav"
+
+    (folder / "ref" / "calm.wav").unlink()  # a statement just outside 4–8 s still beats a question
+    assert characters.discover([str(root)])["桃井"].default_reference().audio == "ref/calm_long.wav"
+
+
+def test_replace_table_changes_what_the_voice_reads(tmp_path):
+    root = tmp_path / "gpt_sovits"
+    make_char(root, "阿罗娜", "JA", {"replace": {"C站": "西站", "LoRA": "萝拉", "插件": "这个插件", "这个插件": "X"}})
+    make_char(root, "普拉娜", "JA")
+    chars = characters.discover([str(root)])
+    plan = build_plan(chars, NodeOptions(character="阿罗娜", language="zh"), "打开C站找LoRA插件。[普拉娜]C站。")
+    # longest match first and one pass: "插件" -> "这个插件" is not replaced again; only 阿罗娜 has a table
+    assert [line.text for line in plan.lines] == ["打开西站找萝拉这个插件。", "C站。"]

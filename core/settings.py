@@ -64,6 +64,11 @@ def validate(data: Any, gpt: Iterable[str], sovits: Iterable[str], audio: Iterab
         errors.append(f"sovits 不是这个角色文件夹里的 .pth：{data['sovits']}")
     if "reference" in data:
         _check_ref("reference", data["reference"], audio, errors)
+    replace = data.get("replace", {})
+    if not isinstance(replace, dict) or not all(
+        isinstance(k, str) and k.strip() and isinstance(v, str) for k, v in replace.items()
+    ):
+        errors.append("replace 必须是 {\"原文\": \"读法\"} 的对象，原文不能为空")
     emotions = data.get("emotions", {})
     if not isinstance(emotions, dict):
         errors.append("emotions 必须是对象")

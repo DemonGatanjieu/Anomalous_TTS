@@ -1,6 +1,6 @@
 # Anomalous_TTS ↔ Anomalous Model Browser 接口约定
 
-版本：9（2026-09-26）
+版本：10（2026-09-29）
 
 两个项目在不同的对话里开发。这份文档是双方唯一的约定：**Anomalous 只依赖这里写的东西**，其余都是 Anomalous_TTS 的内部实现，可以随时改。
 
@@ -16,7 +16,7 @@
 |---|---|
 | 节点类名 | `AnomalousTTS_CharacterSpeech`（发布后不改） |
 | 显示名 | 角色语音 (GPT-SoVITS) |
-| 输出 | `AUDIO`（`{"waveform": [1, 1, T], "sample_rate": int}`） |
+| 输出 | `AUDIO`（`{"waveform": [1, 1, T], "sample_rate": int}`）；`info`（文字：生成了几句、用了几句缓存，以及提示，例如角色没有某个情绪、参考没有台词）。`info` 同时作为界面输出 `text` 出现在 `/history` 里 |
 
 Anomalous 推送剧本时只需要设置两个输入：
 
@@ -25,7 +25,7 @@ Anomalous 推送剧本时只需要设置两个输入：
 | `character` | 下拉 | 值 = 角色名（见第 2 节 `name`） |
 | `text` | 多行文本 | 剧本，语法见第 4 节 |
 
-其他输入都有默认值，Anomalous 不需要碰。需要时可以设置：`language`（`自动` / `日语` / `中文` / `英语`）、`seed`（整数）、`speed`（0.5–2.0）。
+其他输入都是可选的，都有默认值（通过 `/prompt` 只传这两个也能运行），Anomalous 不需要碰。需要时可以设置：`language`（`自动` / `日语` / `中文` / `英语`，也接受 `ja` / `zh` / `en`、`日文`、`japanese`、`cn`、`english` 等写法）、`seed`（整数）、`speed`（0.5–2.0）、`volume`（`统一音量`：每句人声调到约 -20 dBFS，默认；`不调整`）。
 
 ## 2. 角色
 
@@ -56,7 +56,8 @@ Anomalous 推送剧本时只需要设置两个输入：
   "emotions": {
     "开心": { "audio": "参考音频/Arona_AttendanceEvent03_Enter_1.wav" },
     "生气": { "audio": "参考音频/Arona_Work_Talk_3.wav", "text": "…", "language": "ja" }
-  }
+  },
+  "replace": { "C站": "西站", "LoRA": "萝拉" }
 }
 ```
 
@@ -68,10 +69,13 @@ Anomalous 推送剧本时只需要设置两个输入：
 | `gpt` / `sovits` | 默认权重；不写就用轮数最大的 |
 | `reference` | 主参考（剧本里没标情绪、或 `{main}` 的部分） |
 | `emotions` | 情绪名 → 参考。情绪名就是剧本里 `{情绪}` 里写的字 |
+| `replace` | 读音替换：剧本里写的 → 这个角色实际读的。合成前替换（长的先匹配，只替换一遍），剧本和字幕照常写。原文不能为空，读法可以为空（不读） |
 | `text` | 参考台词；不写就依次找：同名 `.txt` 或 `.lab` → 文件夹里的 GPT-SoVITS 标注文件（`.list` 或同格式 `.txt`，`路径|说话人|语言|台词`，先按文件名找，再按去掉情绪后缀的文件名找）→ 都没有则用无参考文本模式 |
 | `language`（参考里） | 参考台词语言；不写就用标注文件里的，再没有就按台词文字自动判断 |
 
 **优先级**（高 → 低）：节点上手动填的 → 设置文件 → 文件名约定（`原名.情绪.wav`，情绪名是文件名第一个点之后的部分；只是音频扩展名的部分不算情绪，例如 `X.ogg.wav`、`X.ogg (1).ogg`）→ 自动挑选。
+
+**自动挑主参考**（3~10 秒的音频里）：有台词的优先 → 和角色同名、不带情绪后缀的文件优先 → 陈述句优先，其次感叹句（台词以 `！` 结尾），问句（以 `？` 结尾）最后 → 4~8 秒优先。参考音频的语气会带到角色说的每一句话里，所以问句只在没有别的可选时才用。
 
 ## 4. 剧本语法
 
@@ -270,7 +274,7 @@ ComfyUI 默认每个请求最大 100MB，权重常常更大，所以分块上传
 - `ref` 是这个文件在 `files` 里的序号，创建时用它指文件。
 - SoVITS 报告 `version`；v3 / v4 标 `supported: false`。
 - 音频报告 `seconds`；台词按第 3 节的规则从一起给的文件里找（同名 `.txt` / `.lab` → `.list` / 同格式 `.txt` 标注文件）；都没有、而文件名读起来像一句话时（至少 4 个汉字或假名，或带句读符号；开头的 `【开心】` 这类标签去掉），用文件名作建议。`text_source` 是 `txt`、`lab`、`list`、`filename` 或 `null`（没找到，让用户粘贴）。`filename` 只是导入时的建议，生成语音时节点从不按文件名猜台词。`language` 来自标注文件，没有就按台词判断。
-- `suggested.name` 取自 GPT 文件名（去掉 `-e<轮数>`）；`suggested.reference` 是第一个 3~10 秒且有台词的音频。
+- `suggested.name` 取自 GPT 文件名（去掉 `-e<轮数>`）；`suggested.reference` 按第 3 节“自动挑主参考”的顺序（不看文件名）从 3~10 秒的音频里挑：有台词、陈述句、4~8 秒优先。
 - 带 `target` 时：每个文件多一个 `existing`，说明角色里同一位置有没有这个文件：`null`（没有，会复制）、`same`（完全一样，会跳过）、`merge`（都是标注文件，新的行会追加进去）、`different`（同名但内容不同，创建时会被拒绝）。台词也会在角色已有的标注文件和同名 `.txt` / `.lab` 里找（一条一条加音频时不用再带标注文件）。
 - `problems` 是给用户看的提醒（不支持的版本、同名但内容不同的文件）。缺不缺权重、音频长度合不合适（`seconds` 不在 3~10 秒）由界面自己判断，这里不提醒。有提醒也可以继续创建。
 
@@ -322,4 +326,5 @@ ComfyUI 默认每个请求最大 100MB，权重常常更大，所以分块上传
 - 6（2026-09-26）：`browse` 加 `recursive=1`，一次列出文件夹里所有能用的文件（批量导入）；`format` 改为 6。
 - 7（2026-09-26）：`import/inspect` 的 `problems` 不再包含“还缺 GPT / SoVITS 权重”（界面的待办清单自己显示）；`format` 改为 7。
 - 8（2026-09-26）：`import/inspect` 的 `problems` 不再逐条提醒不在 3~10 秒的音频（界面按 `seconds` 自己处理）；`browse?recursive=1` 不进入 GPT-SoVITS 程序和训练用的文件夹；`format` 改为 8。
+- 10（2026-09-29）：节点除 `character`、`text` 外的输入都改为可选；`language` 接受别名；加 `volume` 输入（默认统一音量）；`info` 也作为界面输出 `text` 进 `/history`。设置文件加 `replace`（读音替换）。自动挑主参考（以及 `import/inspect` 的 `suggested.reference`）改为优先陈述句和 4~8 秒，避开问句；`format` 改为 10。
 - 9（2026-09-26）：`browse?recursive=1` 的 `output`、`temp`、`tools`、`logs`、`GPT_SoVITS` 只在整合包里跳过，别处照常扫描；`runtime`、`pretrained_models` 一律跳过；最多 6 层；结果加 `skipped`、`too_deep`。导入的文件可以带 `name` 改名。加 `GET /anomalous_tts/import/preview`（试听本机音频）。`format` 改为 9。

@@ -302,7 +302,8 @@ def inspect(specs: Any, target: Any = None) -> Dict[str, Any]:
                 languages[item["language"]] += 1
         files.append(item)
     usable = [f for f in files if f["kind"] == "audio" and characters.REF_MIN_SEC <= f["seconds"] <= characters.REF_MAX_SEC]
-    reference = next((f["ref"] for f in usable if f["text"]), usable[0]["ref"] if usable else None)
+    usable.sort(key=lambda f: characters.reference_rank(f["text"], f["seconds"]))
+    reference = usable[0]["ref"] if usable else None
     return {
         "files": files,
         "suggested": {

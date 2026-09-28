@@ -36,6 +36,11 @@ REF_MAX_SEC = 10.0
 LIST_LANG_CODES = {"JA": "ja", "JP": "ja", "ZH": "zh", "EN": "en"}
 SIDECAR_EXTS = (".txt", ".lab")  # a clip's own line, next to it with the same name
 TEXT_EXTS = SIDECAR_EXTS + (".list",)
+# Automatic main references: the reference's tone carries into everything the voice says (a
+# question as reference makes every sentence end rising), so calm statements of 4–8 s come first.
+CALM_MIN_SEC = 4.0
+CALM_MAX_SEC = 8.0
+_LINE_END = re.compile(r"[\s\"'”’」』）)\]】…。．.~〜ー]+$")
 _LIST_LINE = re.compile(r"^[^|]+\|[^|]*\|([A-Za-z_]+)\|(.+)$")
 _GPT_EPOCH = re.compile(r"-e(\d+)", re.I)
 _SOVITS_EPOCH = re.compile(r"_e(\d+)(?:_s(\d+))?", re.I)
@@ -139,6 +144,20 @@ def text_from_filename(audio_name: str) -> str:
 _duration_cache: Dict[Tuple[str, int, int], float] = {}
 
 
+def tone_of(text: str) -> int:
+    """0 = statement, 1 = exclamation, 2 = question, by how the line ends."""
+    end = _LINE_END.sub("", text or "")
+    if end.endswith(("?", "？")):
+        return 2
+    return 1 if end.endswith(("!", "！")) else 0
+
+
+def reference_rank(text: str, seconds: float) -> Tuple[int, int, int]:
+    """Sort key for picking a main reference automatically (lower is better): a clip with its line
+    first, then statement over exclamation over question, then 4–8 s over the rest of 3–10 s."""
+    return (0 if text else 1, tone_of(text), 0 if CALM_MIN_SEC <= seconds <= CALM_MAX_SEC else 1)
+
+
 def audio_seconds(path: str) -> float:
     """Audio length from the file header, cached by path + mtime + size."""
     try:
@@ -190,6 +209,24 @@ class Character:
         return counts.most_common(1)[0][0] if counts else None
 
     # ----- weights -----
+    @cached_property
+    def _respelling(self) -> Optional[Tuple["re.Pattern[str]", Dict[str, str]]]:
+        table = self.settings.get("replace")
+        if not isinstance(table, dict):
+            return None
+        pairs = {k: v for k, v in table.items() if isinstance(k, str) and k.strip() and isinstance(v, str)}
+        if not pairs:
+            return None
+        return re.compile("|".join(re.escape(k) for k in sorted(pairs, key=len, reverse=True))), pairs
+
+    def respell(self, text: str) -> str:
+        """Apply the settings' ``replace`` table: what to write -> what the voice should read.
+        Longest match first, one pass, so a replacement is never replaced again."""
+        if self._respelling is None:
+            return text
+        pattern, pairs = self._respelling
+        return pattern.sub(lambda m: pairs[m.group(0)], text)
+
     def weight(self, kind: str, rel: Optional[str] = None) -> str:
         """Absolute path of a GPT (kind="gpt") or SoVITS ("sovits") weight."""
         files = getattr(self, kind)
@@ -244,24 +281,31 @@ class Character:
         if isinstance(spec, dict) and spec.get("audio") in self.audio:
             return self.make_reference(spec["audio"], "settings", spec)
         leaf = self.name.split("/")[0]
-        ordered = sorted(
-            self.audio,
-            key=lambda r: (os.path.splitext(os.path.basename(r))[0] != leaf, emotion_of(r) is not None, r),
-        )
-
-        def usable(rel: str) -> bool:
-            return REF_MIN_SEC <= audio_seconds(self.abspath(rel)) <= REF_MAX_SEC
-
-        # Text lookups are cheap; reading audio headers is not (folders can hold ~1000 clips).
-        # So only measure clips that have text, and stop at the first usable one.
-        for rel in ordered:
+        candidates = []
+        for rel in self.audio:
             ref = self.make_reference(rel, "auto")
-            if ref.text and usable(rel):
-                return ref
-        for rel in ordered:
-            if usable(rel):
-                return self.make_reference(rel, "auto")
-        return None
+            # reference_rank without the length part; a clip named like the character (the F5-TTS
+            # main voice layout) and non-emotion clips go first within the same kind of line.
+            text_first, tone, _ = reference_rank(ref.text, CALM_MIN_SEC)
+            named = os.path.splitext(os.path.basename(rel))[0] != leaf
+            candidates.append(((text_first, named, emotion_of(rel) is not None, tone), rel, ref))
+        candidates.sort(key=lambda c: (c[0], c[1]))
+
+        # Text lookups are cheap; reading audio headers is not (folders can hold ~1000 clips). Clips
+        # are measured best-looking first, and the search stops once no later clip can rank higher.
+        best: Optional[Tuple[Tuple, Reference]] = None
+        for prefix, rel, ref in candidates:
+            if best is not None and prefix != best[0][0]:
+                break
+            seconds = audio_seconds(self.abspath(rel))
+            if not REF_MIN_SEC <= seconds <= REF_MAX_SEC:
+                continue
+            key = (prefix, 0 if CALM_MIN_SEC <= seconds <= CALM_MAX_SEC else 1)
+            if best is None or key < best[0]:
+                best = (key, ref)
+            if key[1] == 0:
+                break
+        return best[1] if best else None
 
     @cached_property
     def _emotions(self) -> Dict[str, Reference]:

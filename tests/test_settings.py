@@ -20,3 +20,9 @@ def test_validate_rejects_main_and_bad_language():
 def test_save_roundtrip(tmp_path):
     settings.save(str(tmp_path), {"aliases": ["阿罗娜"], "x": {"keep": True}})
     assert settings.load(str(tmp_path)) == {"aliases": ["阿罗娜"], "x": {"keep": True}, "format": 1}
+
+
+def test_validate_replace_table():
+    assert settings.validate({"replace": {"C站": "西站", "插件": ""}}, [], [], []) == []
+    assert settings.validate({"replace": {" ": "x"}}, [], [], [])
+    assert settings.validate({"replace": ["C站"]}, [], [], [])

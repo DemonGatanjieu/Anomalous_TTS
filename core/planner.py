@@ -161,7 +161,7 @@ class _Builder:
 
     def text(self, text: str) -> None:
         self.resolve_pending_speaker(text)
-        for sentence in split_sentences(text):
+        for sentence in split_sentences(self.speaker.respell(text)):
             lang = self.language_of(sentence)
             self.last_lang = lang
             voice = self.voice(self.speaker, self.emotion, lang)

@@ -23,7 +23,26 @@ log = logging.getLogger("Anomalous_TTS")
 
 AUTO = characters.AUTO
 LANGUAGE_CHOICES = {AUTO: AUTO, "日语": "ja", "中文": "zh", "英语": "en"}
+# Other spellings API callers use for ``language``; matched case-insensitively.
+LANGUAGE_ALIASES = {
+    AUTO: ["auto", ""],
+    "ja": ["日文", "日本語", "ja", "jp", "japanese"],
+    "zh": ["汉语", "普通话", "zh", "cn", "chinese", "mandarin"],
+    "en": ["英文", "en", "english"],
+}
 CROSS_LINGUAL_CHOICES = {"自动调整": True, "不调整": False}
+VOLUME_CHOICES = {"统一音量": -20.0, "不调整": None}
+
+
+def resolve_language(value) -> Optional[str]:
+    """Widget value or alias -> AUTO / ja / zh / en; None when unknown."""
+    text = str(value if value is not None else "").strip()
+    if text in LANGUAGE_CHOICES:
+        return LANGUAGE_CHOICES[text]
+    for code, names in LANGUAGE_ALIASES.items():
+        if text.lower() in names:
+            return code
+    return None
 
 _engine: Optional[Engine] = None
 
@@ -92,7 +111,7 @@ class AnomalousTTS_CharacterSpeech:
     """用 GPT-SoVITS 角色模型读剧本。支持 {情绪}、[角色]、[pause:1s]。"""
 
     CATEGORY = "Anomalous/TTS"
-    RETURN_TYPES = ("AUDIO", "STRING")
+    RETURN_TYPES = ("AUDIO", "STRING")  # info also goes to the UI output, so /history carries it
     RETURN_NAMES = ("audio", "info")
     FUNCTION = "generate"
     DESCRIPTION = (
@@ -115,6 +134,10 @@ class AnomalousTTS_CharacterSpeech:
                         "tooltip": "剧本。{开心} 切换情绪、{main} 切回；[角色名] 换人说；[pause:1s] 插入停顿。",
                     },
                 ),
+            },
+            # Everything below has a default, so an API prompt only needs character + text. The order
+            # is unchanged from when these were required: ComfyUI saves widget values by position.
+            "optional": {
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF}),
                 "speed": ("FLOAT", {"default": 1.0, "min": 0.5, "max": 2.0, "step": 0.05, "tooltip": "语速"}),
                 "language": (list(LANGUAGE_CHOICES), _adv({"default": AUTO, "tooltip": "自动：按每句文字判断"})),
@@ -142,8 +165,20 @@ class AnomalousTTS_CharacterSpeech:
                     "default": "自动调整",
                     "tooltip": "句子和参考音频不是同一种语言时（比如日语角色说中文），这些句子的 top_k 最多 10、temperature 最多 0.8，更稳；你设得更低时按你的",
                 })),
-            }
+                "volume": (list(VOLUME_CHOICES), _adv({
+                    "default": "统一音量",
+                    "tooltip": "统一音量：每句的人声都调到约 -20 dBFS（峰值不超过 -1 dBFS），换种子、换句子音量不再忽大忽小。不调整：保持模型输出的音量",
+                })),
+            },
         }
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, language=AUTO):
+        """``language`` also takes aliases (日文, ja, japanese, zh, cn, en ...), so ComfyUI's own
+        list check is replaced by this one."""
+        if resolve_language(language) is None:
+            return f"language 只能是 {' / '.join(LANGUAGE_CHOICES)}，或 ja / zh / en 等写法：{language!r}"
+        return True
 
     @classmethod
     def IS_CHANGED(cls, character, **kwargs):
@@ -156,9 +191,10 @@ class AnomalousTTS_CharacterSpeech:
         stamp.append(os.path.getmtime(path) if os.path.exists(path) else 0)
         return repr(stamp)
 
-    def generate(self, character, text, seed, speed, language=AUTO, reference_audio="", reference_text="",
+    def generate(self, character, text, seed=0, speed=1.0, language=AUTO, reference_audio="", reference_text="",
                  gpt_weights=AUTO, sovits_weights=AUTO, pause_seconds=0.3, top_k=15, top_p=1.0,
-                 temperature=1.0, repetition_penalty=1.35, batch_size=8, cross_lingual="自动调整"):
+                 temperature=1.0, repetition_penalty=1.35, batch_size=8, cross_lingual="自动调整",
+                 volume="统一音量"):
         chars = characters.scan(max_age=2.0)
         if character not in chars:
             raise ValueError(f"找不到角色：{character}")
@@ -167,7 +203,7 @@ class AnomalousTTS_CharacterSpeech:
             log.warning("[Anomalous_TTS] %s", c.settings_error)
         opts = planner.NodeOptions(
             character=character,
-            language=LANGUAGE_CHOICES.get(language, AUTO),
+            language=resolve_language(language) or AUTO,
             reference_audio=_reference_path(reference_audio, c),
             reference_text=reference_text,
             gpt=_relative(gpt_weights, c, chars),
@@ -192,12 +228,14 @@ class AnomalousTTS_CharacterSpeech:
                 top_k=top_k, top_p=top_p, temperature=temperature, repetition_penalty=repetition_penalty,
                 speed=speed, pause_sec=pause_seconds, batch_size=batch_size,
                 cross_lingual=CROSS_LINGUAL_CHOICES.get(cross_lingual, True),
+                loudness_db=VOLUME_CHOICES.get(volume, VOLUME_CHOICES["统一音量"]),
             ),
             progress=progress,
         )
         log.info("[Anomalous_TTS] %s", report.summary())
         info = "\n".join([report.summary()] + plan.warnings)
-        return ({"waveform": torch.from_numpy(wav).reshape(1, 1, -1), "sample_rate": sr}, info)
+        audio = {"waveform": torch.from_numpy(wav).reshape(1, 1, -1), "sample_rate": sr}
+        return {"ui": {"text": [info]}, "result": (audio, info)}
 
 
 NODE_CLASS_MAPPINGS = {

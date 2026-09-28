@@ -261,3 +261,12 @@ def test_text_from_filename_rules():
     assert characters.text_from_filename("[1][快乐]你好啊朋友.wav") == "你好啊朋友"
     assert characters.text_from_filename("开心.wav") == ""
     assert characters.text_from_filename("Arona_Academy_Talk_3.wav") == ""
+
+
+def test_inspect_suggests_a_calm_statement_as_reference(lib, tmp_path):
+    wav(tmp_path / "ask.wav", 5)
+    wav(tmp_path / "calm.wav", 6)
+    (tmp_path / "ask.txt").write_text("これって、問題だと思わない？", encoding="utf-8")
+    (tmp_path / "calm.txt").write_text("アルバイトでもしようかな。", encoding="utf-8")
+    out = importer.inspect([local(tmp_path / n) for n in ("ask.wav", "ask.txt", "calm.wav", "calm.txt")])
+    assert out["suggested"]["reference"] == 2

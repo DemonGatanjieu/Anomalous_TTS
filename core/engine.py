@@ -22,7 +22,7 @@ import numpy as np
 import torch
 
 from . import dependencies, t2s_batch, text_frontend
-from .audio import load_mono, resample, silence
+from .audio import level, load_mono, resample, silence
 from .models import LRU, GPTModel, Resources, SoVITSModel, file_key
 from .planner import Gap, Line, Plan, Voice
 
@@ -48,6 +48,7 @@ class SynthesisParams:
     pause_sec: float = 0.3
     batch_size: int = 8
     cross_lingual: bool = True  # a line in another language than its reference samples more tightly
+    loudness_db: Optional[float] = -20.0  # each sentence's voiced RMS; None = leave the model's level
 
     def sampling_key(self) -> Tuple:
         return (int(self.top_k), float(self.top_p), float(self.temperature), float(self.repetition_penalty))
@@ -386,7 +387,9 @@ class Engine:
 
     @staticmethod
     def _assemble(plan: Plan, clips: List[Tuple[np.ndarray, int]], params: SynthesisParams) -> Tuple[np.ndarray, int]:
-        """Lines joined by the default pause; a [pause] tag replaces the default pause at that point."""
+        """Lines joined by the default pause; a [pause] tag replaces the default pause at that point.
+        Each line is levelled on its own (cached audio stays as the model made it), so takes and
+        sentences do not jump in volume."""
         sr = clips[0][1]
         pieces: List[np.ndarray] = []
         gap: Optional[float] = None
@@ -400,6 +403,7 @@ class Engine:
             gap = None
             clip, clip_sr = clips[n]
             n += 1
-            pieces.append(resample(clip, clip_sr, sr))
+            clip = resample(clip, clip_sr, sr)
+            pieces.append(clip if params.loudness_db is None else level(clip, sr, params.loudness_db))
         pieces.append(silence(params.pause_sec if gap is None else gap, sr))  # tail, like GPT-SoVITS
         return np.concatenate(pieces).astype(np.float32), sr
