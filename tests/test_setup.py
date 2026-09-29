@@ -71,6 +71,13 @@ def _wait_for(check, seconds=5.0):
     raise AssertionError("timed out")
 
 
+def test_download_needs_explicit_ids():
+    for body in ({}, {"ids": "g2pw"}, {"ids": [1]}):
+        with pytest.raises(web.HTTPBadRequest):
+            server._download_ids(body)
+    assert server._download_ids({"ids": ["g2pw"]}) == ["g2pw"]
+
+
 def test_download_runs_in_background_and_reports_errors(fresh, monkeypatch):
     fetched = []
 

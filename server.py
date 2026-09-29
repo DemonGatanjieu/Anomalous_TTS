@@ -125,8 +125,6 @@ def _path_field(body: Dict[str, Any]) -> str:
 
 def _download_ids(body: Dict[str, Any]) -> List[str]:
     ids = body.get("ids")
-    if ids is None:
-        return [p["id"] for p in paths.pretrained_status() if p["state"] == "missing"]
     if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
         raise web.HTTPBadRequest(text="ids 必须是字符串列表")
     return ids

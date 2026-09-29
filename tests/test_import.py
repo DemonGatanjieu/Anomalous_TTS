@@ -105,9 +105,11 @@ def test_commit_new_character_copies_files_and_writes_settings(lib, pkg):
 def test_commit_new_character_needs_both_weights_and_a_valid_name(lib, pkg):
     with pytest.raises(ValueError, match="至少"):
         importer.commit({"library": str(lib), "character": "X", "files": [local(pkg / "GPT_weights_v2" / "ALuoNa-e15.ckpt")]})
-    for bad in ("a/b", "CON", "x.", "..", ""):
+    # U+202E and zero-width characters make a name display as something else.
+    for bad in ("a/b", "CON", "x.", "..", "", "evil\u202egnp.wav", "阿\u200b罗娜", "\ufeffx"):
         with pytest.raises(ValueError):
             importer.safe_name(bad)
+    assert importer.safe_name("阿罗娜 v2") == "阿罗娜 v2"
     with pytest.raises(ValueError, match="角色库"):
         importer.commit({"library": str(pkg), "character": "X", "files": [local(pkg / "GPT_weights_v2" / "ALuoNa-e15.ckpt")]})
 

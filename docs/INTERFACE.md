@@ -214,7 +214,7 @@ Anomalous 推送剧本时只需要设置两个输入：
 
 #### 🔒 `POST /anomalous_tts/pretrained/download`
 
-`{ "ids": ["roberta", "g2pw"] }`，不写 `ids` = 下载所有缺的。立即返回 `{"ok": true}`，在后台逐个下载，进度看 `status`。已有的、正在下载的会跳过。只有用户点了按钮才调用。
+`{ "ids": ["roberta", "g2pw"] }`，`ids` 必须写（要全部下载就列出 `status` 里所有缺的），不写返回 400。立即返回 `{"ok": true}`，在后台逐个下载，进度看 `status`。已有的、正在下载的会跳过。只有用户点了按钮才调用。
 
 #### 🔒 `GET /anomalous_tts/browse?path=<文件夹>`
 
@@ -329,6 +329,6 @@ ComfyUI 默认每个请求最大 100MB，权重常常更大，所以分块上传
 - 6（2026-09-26）：`browse` 加 `recursive=1`，一次列出文件夹里所有能用的文件（批量导入）；`format` 改为 6。
 - 7（2026-09-26）：`import/inspect` 的 `problems` 不再包含“还缺 GPT / SoVITS 权重”（界面的待办清单自己显示）；`format` 改为 7。
 - 8（2026-09-26）：`import/inspect` 的 `problems` 不再逐条提醒不在 3~10 秒的音频（界面按 `seconds` 自己处理）；`browse?recursive=1` 不进入 GPT-SoVITS 程序和训练用的文件夹；`format` 改为 8。
-- 11（2026-09-29）：剧本语法加 `[take:N]`（只重做一段）；设置文件加 `defaults`（Anomalous 直接生成时用的语言、语速）；`format` 改为 11。
+- 11（2026-09-29）：剧本语法加 `[take:N]`（只重做一段）；设置文件加 `defaults`（Anomalous 直接生成时用的语言、语速）；`pretrained/download` 必须写 `ids`，空请求体不再下载全部；文件名、角色名不能含不可见字符和改变文字方向的字符（如 U+202E）；`format` 改为 11。
 - 10（2026-09-29）：节点除 `character`、`text` 外的输入都改为可选；`language` 接受别名；加 `volume` 输入（默认统一音量）；`info` 也作为界面输出 `text` 进 `/history`。设置文件加 `replace`（读音替换）。自动挑主参考（以及 `import/inspect` 的 `suggested.reference`）改为优先陈述句和 4~8 秒，避开问句；`format` 改为 10。
 - 9（2026-09-26）：`browse?recursive=1` 的 `output`、`temp`、`tools`、`logs`、`GPT_SoVITS` 只在整合包里跳过，别处照常扫描；`runtime`、`pretrained_models` 一律跳过；最多 6 层；结果加 `skipped`、`too_deep`。导入的文件可以带 `name` 改名。加 `GET /anomalous_tts/import/preview`（试听本机音频）。`format` 改为 9。

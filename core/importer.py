@@ -41,7 +41,9 @@ MAX_UPLOAD = 8 * 1024**3
 SUBFOLDER = {"gpt": "GPT_weights", "sovits": "SoVITS_weights", "audio": "参考音频", "text": "参考音频"}
 SUPPORTED_SOVITS = {"v1", "v2", "v2Pro", "v2ProPlus"}
 _RESERVED = re.compile(r"^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$", re.I)
-_BAD_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+# What Windows forbids, plus invisible and direction-changing characters (U+202E can
+# make a name display as something else).
+_BAD_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]')
 
 
 class Conflict(ValueError):
