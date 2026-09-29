@@ -35,7 +35,7 @@ REF_MAX_SEC = 10.0
 # no take failed at the defaults either, but these gave the most consistent takes across seeds.
 CROSS_LINGUAL_TOP_K = 10
 CROSS_LINGUAL_TEMPERATURE = 0.8
-AUDIO_CACHE_BYTES = 256 * 1024 * 1024
+AUDIO_CACHE_BYTES = 64 * 1024 * 1024  # ~8 minutes of speech, enough to redo one line of a script
 
 
 @dataclass
@@ -144,17 +144,31 @@ class Engine:
     def holds_models(self) -> bool:
         return bool(self._gpt or self._sovits or self._hubert or self._roberta or self._sv)
 
+    def holds_anything(self) -> bool:
+        """Models, the g2pW session or cached sentences: what "Unload models" should also free."""
+        return self.holds_models() or self._zh_ready or bool(self._audio or self._tokens)
+
     def on(self, device) -> bool:
         """Whether ``device`` (a ComfyUI device, or None for all) is the one our models are on."""
         return device is None or torch.device(device).type == self.device.type
 
-    def unload(self) -> None:
-        """Free models (when ComfyUI needs the memory). Sentence caches are kept: they are small."""
+    def unload(self, everything: bool = False) -> None:
+        """Free models when ComfyUI needs the memory, and the g2pW session (RAM), which the
+        next Chinese line loads again. ``everything`` ("Unload models") also drops the
+        sentence caches, so a later redo of one line regenerates the whole script."""
         with self._lock:
             self._hubert = self._roberta = self._sv = None
             self._gpt.clear()
             self._sovits.clear()
             self._refs.clear()
+            if self._zh_ready:
+                from ..vendor.gpt_sovits.text import chinese2
+
+                chinese2.disable_g2pw()
+                self._zh_ready = False
+            if everything:
+                self._audio.clear()
+                self._tokens.clear()
 
     # ================= text_frontend.Context =================
     def bert(self, norm_text: str, word2ph: List[int]) -> torch.Tensor:

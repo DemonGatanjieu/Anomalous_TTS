@@ -61,15 +61,21 @@ def _hook_free_memory() -> None:
 
     Our models are not ComfyUI ModelPatchers, so ComfyUI does not track them. Wrap
     ``free_memory``: when ComfyUI asks for more than is free on our device (loading an
-    image model, or "Unload models", which asks for everything), drop our models first.
-    With enough free memory they stay loaded, so the next speech needs no reload.
+    image model), drop our models and the g2pW session first. "Unload models" asks for
+    everything: then the sentence caches go too, whatever device it names. With enough
+    free memory everything stays, so the next speech needs no reload.
     """
     original = mm.free_memory
     if getattr(original, "_anomalous_tts", False):
         return
 
     def free_memory(memory_required, device, *args, **kwargs):
-        if _engine is not None and _engine.holds_models() and _engine.on(device) \
+        everything = memory_required >= 1e29  # comfy.model_management.unload_all_models
+        if _engine is not None and everything and _engine.holds_anything():
+            log.info("[Anomalous_TTS] 卸载模型：释放 GPT-SoVITS 模型、中文多音字模型和句子缓存")
+            _engine.unload(everything=True)
+            mm.soft_empty_cache()
+        elif _engine is not None and _engine.holds_models() and _engine.on(device) \
                 and mm.get_free_memory(device) < memory_required:
             log.info("[Anomalous_TTS] 显存不够，先让出 GPT-SoVITS 模型（下次生成语音时重新加载）")
             _engine.unload()

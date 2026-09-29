@@ -49,6 +49,15 @@ def enable_g2pw(model_dir, tokenizer_dir):
     correct_pronunciation = _correct
     is_g2pw = True
 
+
+def disable_g2pw():
+    """Anomalous_TTS: drop the g2pW session (~600 MB of RAM); pypinyin until enable_g2pw again."""
+    global is_g2pw, g2pw, correct_pronunciation
+    is_g2pw = False
+    g2pw = None
+    correct_pronunciation = None
+
+
 rep_map = {
     "：": ",",
     "；": ",",

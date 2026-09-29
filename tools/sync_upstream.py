@@ -113,6 +113,15 @@ def enable_g2pw(model_dir, tokenizer_dir):
     )
     correct_pronunciation = _correct
     is_g2pw = True
+
+
+def disable_g2pw():
+    \"\"\"Anomalous_TTS: drop the g2pW session (~600 MB of RAM); pypinyin until enable_g2pw again.\"\"\"
+    global is_g2pw, g2pw, correct_pronunciation
+    is_g2pw = False
+    g2pw = None
+    correct_pronunciation = None
+
 """)
 p("text/chinese2.py", '            print("pypinyin结果", initials, finals)\n', "")
 p("text/chinese2.py", "import jieba_fast\nimport logging\n\njieba_fast.setLogLevel(logging.CRITICAL)\nimport jieba_fast.posseg as psg\n",
@@ -126,6 +135,29 @@ p("text/g2pw/__init__.py", "from text.g2pw.g2pw import *", "from .g2pw import *"
 p("text/g2pw/onnx_api.py", "import requests\nfrom opencc import OpenCC\n", "")
 p("text/g2pw/onnx_api.py", "        with requests.get(modelscope_url, stream=True) as r:", "        import requests\n\n        with requests.get(modelscope_url, stream=True) as r:")
 p("text/g2pw/onnx_api.py", '            self.cc = OpenCC("s2tw")', '            from opencc import OpenCC\n\n            self.cc = OpenCC("s2tw")')
+p("text/g2pw/onnx_api.py", "try:\n    onnxruntime.preload_dlls()\nexcept Exception:\n    pass\n", "")
+p("text/g2pw/onnx_api.py", """        if "CUDAExecutionProvider" in onnxruntime.get_available_providers():
+            self.session_g2pw = onnxruntime.InferenceSession(
+                onnx_path,
+                sess_options=sess_options,
+                providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+            )
+        else:
+            self.session_g2pw = onnxruntime.InferenceSession(
+                onnx_path,
+                sess_options=sess_options,
+                providers=["CPUExecutionProvider"],
+            )
+""", """        # CPU only: g2pW is a few milliseconds per sentence there. onnxruntime-gpu lists
+        # CUDA as available even when its CUDA libraries do not match the ones torch
+        # ships (e.g. onnxruntime for CUDA 12 next to torch cu130), then prints a red
+        # load error on every run and falls back to CPU anyway.
+        self.session_g2pw = onnxruntime.InferenceSession(
+            onnx_path,
+            sess_options=sess_options,
+            providers=["CPUExecutionProvider"],
+        )
+""")
 
 # --- English front end ---
 p("text/english.py", "from text.symbols import punctuation\n", "from .symbols import punctuation\n")

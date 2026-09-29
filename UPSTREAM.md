@@ -30,13 +30,13 @@
 5. `module/mel_processing.py`：librosa 改为用到时才导入（推理只用 `spectrogram_torch`，不需要 librosa）。
 6. `text/chinese2.py`：
    - 删掉没用到的 `cn2an`。
-   - g2pW 不在导入时加载（上游写死了相对路径并会自动下载），改由 `enable_g2pw(模型目录, 分词器目录)` 按需加载；加载前走上游自带的 pypinyin 分支。
+   - g2pW 不在导入时加载（上游写死了相对路径并会自动下载），改由 `enable_g2pw(模型目录, 分词器目录)` 按需加载；加载前走上游自带的 pypinyin 分支。`disable_g2pw()` 再把它放掉（约 600 MB 内存），引擎卸载模型时调用。
    - 删掉 pypinyin 分支里每次都打印的调试输出。
    - `jieba_fast` 装不上时退回纯 Python 的 `jieba`（70 句测试结果一致）。
 7. `text/tone_sandhi.py`：
    - 同上，`jieba_fast` → `jieba` 兜底。
    - **有意和官方不同**：叠字变轻声只用在真正的叠字上。上游把一个词里任何两个挨着的相同字的第二个读成轻声，jieba 把“银行行长”分成一个词，于是读成 yin2 hang2 hang5 zhang3。现在 3 个字以内的词照旧；4 个字以上的词只有开头两个字相同（好好学习）或 AABB（高高兴兴）才变，“银行行长”“人民民主”这种跨了两个词的不变。
-8. `text/g2pw/onnx_api.py`：`requests`、`opencc` 改为用到时才导入。
+8. `text/g2pw/onnx_api.py`：`requests`、`opencc` 改为用到时才导入；g2pW 只在 CPU 上跑，去掉 `preload_dlls()`（onnxruntime-gpu 要的 CUDA 版本和 torch 自带的不一样时，上游每次都会报一段红字再退回 CPU）。
 9. `text/english.py`：相对 import；词典路径由 `configure(词典目录, 缓存目录)` 指定；`en_G2p()` 改为首次使用时才创建（上游在导入时就加载词典）；词典按 UTF-8 读（上游用系统默认编码，中文 Windows 上是 GBK，第一次生成 `engdict_cache.pickle` 时会报错）。
 10. `eres2net/ERes2NetV2.py`：相对 import。
 
