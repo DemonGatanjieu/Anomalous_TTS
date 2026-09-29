@@ -17,10 +17,6 @@ from .dataset import get_char_phoneme_labels, get_phoneme_labels, prepare_onnx_i
 from .utils import load_config
 
 onnxruntime.set_default_logger_severity(3)
-try:
-    onnxruntime.preload_dlls()
-except Exception:
-    pass
 warnings.filterwarnings("ignore")
 
 model_version = "1.1"
@@ -342,18 +338,15 @@ class G2PWOnnxConverter(_G2PWBaseOnnxConverter):
             os.path.join(self.model_dir, "g2pw.onnx"),
         )
 
-        if "CUDAExecutionProvider" in onnxruntime.get_available_providers():
-            self.session_g2pw = onnxruntime.InferenceSession(
-                onnx_path,
-                sess_options=sess_options,
-                providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
-            )
-        else:
-            self.session_g2pw = onnxruntime.InferenceSession(
-                onnx_path,
-                sess_options=sess_options,
-                providers=["CPUExecutionProvider"],
-            )
+        # CPU only: g2pW is a few milliseconds per sentence there. onnxruntime-gpu lists
+        # CUDA as available even when its CUDA libraries do not match the ones torch
+        # ships (e.g. onnxruntime for CUDA 12 next to torch cu130), then prints a red
+        # load error on every run and falls back to CPU anyway.
+        self.session_g2pw = onnxruntime.InferenceSession(
+            onnx_path,
+            sess_options=sess_options,
+            providers=["CPUExecutionProvider"],
+        )
 
     def _predict(self, model_input: Dict[str, Any]) -> Tuple[List[str], List[float]]:
         return predict(session=self.session_g2pw, onnx_input=model_input, labels=self.labels)

@@ -15,6 +15,7 @@
 - API 调用更方便：只传 `character` 和 `text` 就能运行；`language` 可以写 `ja`、`zh`、`日文`、`japanese` 等；提示（比如角色没有某个情绪、改用主参考）会出现在 `/history` 里。
 
 ### 显存
+- 中文多音字模型（g2pW）只在 CPU 上跑，每句几十毫秒。装了 onnxruntime-gpu 但它要的 CUDA 版本和 torch 自带的不一样时（比如 onnxruntime 要 CUDA 12，torch 是 cu130），以前每次生成都会在命令行里冒一段红字 `cublasLt64_12.dll ... is missing`，最后还是退回 CPU；现在不再尝试 GPU，也就没有这段红字。
 - 生成语音后模型留在显存里（下次不用重新加载）；ComfyUI 要加载图像模型而显存不够时，会先让出 GPT-SoVITS 的模型（约 1.2 GB），不再挤占图像生成。以前只有点“卸载模型”才会释放。
 
 ### 日语角色说中文
