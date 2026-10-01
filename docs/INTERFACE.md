@@ -317,6 +317,18 @@ ComfyUI 默认每个请求最大 100MB，权重常常更大，所以分块上传
 - 全有或全无：先在暂存区拼好，最后一步才放进角色库；中途失败时角色库保持原样，上传的文件回到暂存区，可以直接重试。
 - 成功 → `{"ok": true, "character": {…单个角色详情…}, "skipped": ["参考音频/a.wav"], "merged": ["参考音频/all.list"]}`（`skipped` / `merged` 是相对路径，新建角色时都是空列表），角色列表同时刷新。
 
+## 6. 节点调用 Anomalous
+
+Anomalous Model Browser 加载后在页面上提供：
+
+```js
+window.anomalous_open_voice(character)  // → true：已打开浏览器的“角色语音”页并定位到这个角色
+```
+
+- `character` 是节点 `character` 控件的值（角色名，多套模型时是 `角色/子文件夹`）；空字符串打开整个页面。
+- 节点“角色”菜单里的“导入或编辑角色”调用它。函数不存在（没装 Anomalous 或版本太旧）时，节点改为提示安装并打开 Anomalous 的项目主页。
+- 只负责打开界面，不读写任何文件。
+
 ---
 
 ## 变更记录
