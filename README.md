@@ -95,33 +95,23 @@ models/gpt_sovits/
 <details>
 <summary><b>已有的模型和底模</b></summary>
 
-已有的模型不用复制。存放位置（导入的角色放在哪）、其他角色文件夹和导入时能浏览的文件夹，写在 `ComfyUI/user/anomalous_tts.json` 里（路径要写完整，改完不用重启）：
+已有的模型不用复制。存放位置（导入的角色放在哪）、其他角色文件夹，以及电脑上已有的 GPT-SoVITS 整合包（用它的底模，省掉下载），写在 `ComfyUI/user/anomalous_tts.json` 里（路径要写完整，改完不用重启）：
 
 ```json
 {
   "format": 1,
   "storage": "D:/voices",
   "libraries": ["E:/old voices"],
-  "import_folders": ["D:/GPT-SoVITS"]
+  "pretrained": ["D:/GPT-SoVITS/GPT_SoVITS"]
 }
 ```
 
-这些只能在这个文件里改，网页上改不了；导入时也只能浏览、读取 `import_folders` 里的文件（拖进浏览器的文件不受限制）。整合包的底模可以在 Anomalous 的音频页里指定。也可以在 `ComfyUI/extra_model_paths.yaml` 里加目录：
+这些只能在这个文件里改，网页上改不了。导入角色时文件一律从浏览器上传（拖进 Anomalous 或在里面选），节点不会按路径去读你电脑上的文件。角色文件夹也可以在 `ComfyUI/extra_model_paths.yaml` 里加：
 
 ```yaml
 anomalous_tts:
     base_path: D:/voices
     gpt_sovits: 模型
-```
-
-电脑上有 GPT-SoVITS 整合包的话，把它的底模也加进来，省掉下载：
-
-```yaml
-gpt_sovits_pretrained:
-    base_path: D:/GPT-SoVITS/GPT_SoVITS
-    gpt_sovits: |
-        pretrained_models
-        text
 ```
 
 底模（首次使用时自动下载到 `models/gpt_sovits/pretrained/`）：

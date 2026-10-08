@@ -1,4 +1,4 @@
-"""Where characters are kept: only what the user wrote in the settings file, never a request."""
+"""Where folders come from: only what the user wrote in the settings file, never a request."""
 
 import json
 
@@ -42,41 +42,28 @@ def test_more_libraries_come_from_the_settings_file(fresh):  # noqa: F811
     assert {lib["path"]: lib["source"] for lib in paths.libraries()}[paths.norm(str(old))] == "app"
 
 
-def test_no_route_changes_where_folders_are(fresh):  # noqa: F811
+def test_no_route_takes_a_folder_or_a_file_on_this_computer(fresh):  # noqa: F811
     routes = web.RouteTableDef()
     server.register(type("PromptServer", (), {"routes": routes})())
-    posts = {r.path for r in routes if r.method == "POST"}
-    assert "/anomalous_tts/storage" not in posts and "/anomalous_tts/libraries" not in posts
-    assert not any("import_folders" in p for p in posts)
+    assert {(r.method, r.path) for r in routes} == {
+        ("GET", "/anomalous_tts/characters"), ("GET", "/anomalous_tts/audio"), ("GET", "/anomalous_tts/status"),
+        ("POST", "/anomalous_tts/settings"), ("POST", "/anomalous_tts/pretrained/download"),
+        ("POST", "/anomalous_tts/import/upload"), ("POST", "/anomalous_tts/import/inspect"),
+        ("POST", "/anomalous_tts/import/commit"), ("POST", "/anomalous_tts/import/discard"),
+    }  # no storage, libraries, pretrained/source, browse or import/preview
+    clip = fresh / "clip.wav"
+    clip.write_bytes(b"RIFF")
+    with pytest.raises(ValueError, match="upload"):
+        importer.inspect([{"path": str(clip)}])  # a file is imported only by uploading it
 
 
 def test_unusable_entries_in_the_settings_file_are_ignored(fresh):  # noqa: F811
     configure()
     with open(app_config.path(), "w", encoding="utf-8") as f:
-        json.dump({"format": 1, "storage": "", "libraries": "voices", "import_folders": ["relative", 3, " "]}, f)
+        json.dump({"format": 1, "storage": "", "libraries": "voices", "pretrained": ["relative", 3, " "]}, f)
     config = app_config.load()
-    assert (config["storage"], config["libraries"], config["import_folders"]) == (None, [], [])
+    assert (config["storage"], config["libraries"], config["pretrained"]) == (None, [], [])
     assert paths.storage() == paths.norm(paths._default_library())  # not ComfyUI's working folder
-
-
-def test_saving_keeps_what_the_user_wrote(fresh):  # noqa: F811
-    configure(storage=fresh / "voices", import_folders=[fresh / "GPT-SoVITS"])
-    with open(app_config.path(), encoding="utf-8") as f:
-        data = json.load(f)
-    data["note"] = "mine"
-    with open(app_config.path(), "w", encoding="utf-8") as f:
-        json.dump(data, f)
-    app_config.add("pretrained", "D:/GPT-SoVITS/GPT_SoVITS")
-    with open(app_config.path(), encoding="utf-8") as f:
-        saved = json.load(f)
-    assert saved == {**data, "pretrained": ["D:/GPT-SoVITS/GPT_SoVITS"]}
-
-    with open(app_config.path(), "w", encoding="utf-8") as f:
-        f.write('{"storage": "D:/voices",')  # a typo while editing by hand
-    with pytest.raises(ValueError, match="设置文件读不了"):
-        app_config.add("pretrained", "D:/other")
-    with open(app_config.path(), encoding="utf-8") as f:
-        assert f.read() == '{"storage": "D:/voices",'  # not replaced
 
 
 def test_a_missing_storage_place_is_never_swapped_for_another(fresh, tmp_path):  # noqa: F811

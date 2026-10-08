@@ -12,12 +12,9 @@ and folders the user wrote in ``ComfyUI/user/anomalous_tts.json``
 imported characters go (default ``models/gpt_sovits``), and more folders with
 characters. No request changes them.
 
-Import folders (also from that file) are the only places the import routes list
-and read files from (``import_root``).
-
 Pretrained files are looked up under every library (``<root>/pretrained/<name>``
-or ``<root>/<name>``) and in GPT-SoVITS packages added as pretrained sources
-(``GPT_SoVITS``, its ``pretrained_models`` and ``text``). Missing ones are
+or ``<root>/<name>``) and in GPT-SoVITS packages listed in that file as
+pretrained sources (``GPT_SoVITS``, its ``pretrained_models`` and ``text``). Missing ones are
 downloaded into ``models/gpt_sovits/pretrained`` on first use or from the UI.
 """
 
@@ -71,7 +68,6 @@ NLTK_PACKAGES = (
 NLTK_URL = "https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/{name}.zip"
 
 _lock = threading.Lock()
-_sources: List[str] = []  # pretrained sources from app_config, loaded by register()
 
 
 def norm(path: str) -> str:
@@ -101,7 +97,6 @@ def register() -> None:
             folder_paths.add_model_folder_path(CATEGORY, folder)
         else:
             log.warning("[Anomalous_TTS] 找不到角色库 %s，已跳过（可以在 %s 里删掉）。", folder, app_config.path())
-    _sources[:] = config["pretrained"]
 
 
 def _register_configured() -> None:
@@ -169,29 +164,6 @@ def register_folder(folder: str) -> None:
         folder_paths.add_model_folder_path(CATEGORY, norm(folder))
 
 
-# ---------- import folders ----------
-def import_folders() -> List[str]:
-    """The folders imports may read from, as the user listed them (existing ones only)."""
-    return [norm(p) for p in app_config.load()["import_folders"] if os.path.isdir(p)]
-
-
-def import_root(path: str) -> Optional[str]:
-    """The import folder that holds ``path``, or None. Links are followed first, so a link inside
-    an import folder that points elsewhere does not count as inside."""
-    real = os.path.realpath(path)
-    for root in import_folders():
-        if is_inside(real, os.path.realpath(root)):
-            return root
-    return None
-
-
-def require_import_path(path: str) -> str:
-    """``path`` as an absolute path when it is inside an import folder, else ValueError."""
-    if not path or import_root(path) is None:
-        raise ValueError(f"不在导入文件夹里：{norm(path or '')}。可以导入的文件夹写在 {app_config.path()} 的 import_folders 里")
-    return os.path.abspath(path)
-
-
 # ---------- pretrained lookup ----------
 def _source_dirs(source: str) -> List[str]:
     return [source, os.path.join(source, "pretrained_models"), os.path.join(source, "text")]
@@ -201,7 +173,7 @@ def _search_dirs() -> List[str]:
     dirs = []
     for root in folder_paths.get_folder_paths(CATEGORY):
         dirs += [os.path.join(root, "pretrained"), root]  # a root may *be* a pretrained_models folder
-    for source in _sources:
+    for source in pretrained_sources():
         dirs += _source_dirs(source)
     return dirs
 
@@ -487,29 +459,5 @@ def pretrained_status() -> List[Dict]:
 
 
 def pretrained_sources() -> List[str]:
-    return list(_sources)
-
-
-def add_pretrained_source(folder: str) -> None:
-    """A GPT-SoVITS package folder (``GPT_SoVITS``, or its ``pretrained_models``)."""
-    folder = norm(folder)
-    if not os.path.isdir(folder):
-        raise ValueError(f"文件夹不存在：{folder}")
-    if any(_key(s) == _key(folder) for s in _sources):
-        raise ValueError(f"已经添加过了：{folder}")
-    dirs = _source_dirs(folder)
-    if not any(locate(i, dirs) for i in PRETRAINED_IDS):
-        raise ValueError(
-            f"{folder} 里没有找到底模。请选择 GPT-SoVITS 整合包里的 GPT_SoVITS 文件夹"
-            "（里面有 pretrained_models 和 text）。"
-        )
-    app_config.add("pretrained", folder)
-    _sources.append(folder)
-
-
-def remove_pretrained_source(folder: str) -> None:
-    stored = next((s for s in _sources if _key(s) == _key(folder)), None)
-    if stored is None:
-        raise ValueError(f"没有添加过这个底模来源：{folder}")
-    app_config.remove("pretrained", stored)
-    _sources.remove(stored)
+    """GPT-SoVITS packages the user listed in the settings file (``pretrained``)."""
+    return [norm(p) for p in app_config.load()["pretrained"]]

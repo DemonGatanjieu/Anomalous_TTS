@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from aiohttp import web
 
-from .core import app_config, browse, characters, dependencies, downloads, importer, paths, settings
+from .core import app_config, characters, dependencies, downloads, importer, paths, settings
 
 log = logging.getLogger("Anomalous_TTS")
 
@@ -70,7 +70,6 @@ def _status_payload(local: bool) -> Dict[str, Any]:
         "settings_file": app_config.path(),
         "storage": paths.storage(),
         "libraries": libraries,
-        "import_folders": paths.import_folders(),
         "pretrained": pretrained,
         "pretrained_sources": paths.pretrained_sources(),
         "dependencies": deps,
@@ -106,17 +105,6 @@ async def _in_thread(fn: Callable, *args):
                                content_type="application/json")
     except ValueError as e:
         raise web.HTTPBadRequest(text=str(e))
-
-
-def _change_pretrained_source(folder: str, remove: bool) -> None:
-    (paths.remove_pretrained_source if remove else paths.add_pretrained_source)(folder)
-
-
-def _path_field(body: Dict[str, Any]) -> str:
-    folder = body.get("path")
-    if not isinstance(folder, str) or not folder.strip():
-        raise web.HTTPBadRequest(text="缺少 path")
-    return folder.strip()
 
 
 def _download_ids(body: Dict[str, Any]) -> List[str]:
@@ -157,13 +145,6 @@ def register(prompt_server) -> None:
     async def get_status(request):
         return web.json_response(await _in_thread(_status_payload, _is_local(request)))
 
-    @routes.post("/anomalous_tts/pretrained/source")
-    async def post_pretrained_source(request):
-        _require_local(request)
-        body = await _json_body(request)
-        await _in_thread(_change_pretrained_source, _path_field(body), bool(body.get("remove")))
-        return web.json_response(await _in_thread(_status_payload, True))
-
     @routes.post("/anomalous_tts/pretrained/download")
     async def post_pretrained_download(request):
         _require_local(request)
@@ -171,18 +152,6 @@ def register(prompt_server) -> None:
         ids = await _in_thread(_download_ids, body)
         await _in_thread(downloads.start, ids)
         return web.json_response({"ok": True})
-
-    @routes.get("/anomalous_tts/browse")
-    async def get_browse(request):
-        _require_local(request)
-        if request.query.get("recursive") == "1":
-            return web.json_response(await _in_thread(browse.scan, request.query.get("path")))
-        return web.json_response(await _in_thread(browse.listing, request.query.get("path")))
-
-    @routes.get("/anomalous_tts/import/preview")
-    async def get_import_preview(request):
-        _require_local(request)
-        return web.FileResponse(await _in_thread(browse.audio_file, request.query.get("path")))
 
     @routes.post("/anomalous_tts/import/upload")
     async def post_import_upload(request):

@@ -14,7 +14,7 @@ from test_setup import configure, fresh  # noqa: F401  (fixture)
 def lib(fresh):  # noqa: F811
     folder = fresh / "voices"
     folder.mkdir()
-    configure(storage=folder, import_folders=[fresh / "GPT-SoVITS"])  # imports go to the storage place
+    configure(storage=folder)  # imports go to the storage place
     return folder
 
 
@@ -43,10 +43,6 @@ def upload(path, library=None, chunk=40_000):
     return {"upload": upload_id}
 
 
-def local(path):
-    return {"path": str(path)}
-
-
 def test_chunked_upload_checks_offsets_and_size(lib, pkg):
     data = (pkg / "ref" / "Talk_3.wav").read_bytes()
     upload_id = importer.start_upload("Talk_3.wav", len(data))
@@ -68,9 +64,9 @@ def test_chunked_upload_checks_offsets_and_size(lib, pkg):
 
 
 def test_inspect_suggests_name_reference_and_text(lib, pkg):
-    files = [local(pkg / "GPT_weights_v2" / "ALuoNa-e15.ckpt"), upload(pkg / "SoVITS_weights_v2" / "ALuoNa_e16_s224.pth"),
-             upload(pkg / "ref" / "Talk_3.wav"), local(pkg / "ref" / "Happy.wav"), local(pkg / "ref" / "Happy.txt"),
-             local(pkg / "ref" / "all.list"), local(pkg / "ref" / "short.wav"), local(pkg / "SoVITS_weights_v2" / "New_e8_s80.pth")]
+    files = [upload(pkg / "GPT_weights_v2" / "ALuoNa-e15.ckpt"), upload(pkg / "SoVITS_weights_v2" / "ALuoNa_e16_s224.pth"),
+             upload(pkg / "ref" / "Talk_3.wav"), upload(pkg / "ref" / "Happy.wav"), upload(pkg / "ref" / "Happy.txt"),
+             upload(pkg / "ref" / "all.list"), upload(pkg / "ref" / "short.wav"), upload(pkg / "SoVITS_weights_v2" / "New_e8_s80.pth")]
     out = importer.inspect(files)
     by_name = {f["name"]: f for f in out["files"]}
     assert out["suggested"] == {"name": "ALuoNa", "language": "ja", "reference": 2}
@@ -84,8 +80,8 @@ def test_inspect_suggests_name_reference_and_text(lib, pkg):
 
 def test_commit_new_character_copies_files_and_writes_settings(lib, pkg):
     gpt = pkg / "GPT_weights_v2" / "ALuoNa-e15.ckpt"
-    files = [local(gpt), upload(pkg / "SoVITS_weights_v2" / "ALuoNa_e16_s224.pth"), upload(pkg / "ref" / "Talk_3.wav"),
-             local(pkg / "ref" / "Happy.wav")]
+    files = [upload(gpt), upload(pkg / "SoVITS_weights_v2" / "ALuoNa_e16_s224.pth"), upload(pkg / "ref" / "Talk_3.wav"),
+             upload(pkg / "ref" / "Happy.wav")]
     c = importer.commit({"library": str(lib), "character": "阿罗娜", "files": files, "settings": {
         "aliases": ["阿罗娜"], "language": "ja",
         "reference": {"file": 2, "text": "通常授業！", "language": "ja"},
@@ -99,45 +95,45 @@ def test_commit_new_character_copies_files_and_writes_settings(lib, pkg):
     assert os.listdir(lib / importer.STAGING) == []  # uploads and work folder are gone
 
     with pytest.raises(importer.Conflict):
-        importer.commit({"library": str(lib), "character": "阿罗娜", "files": [local(gpt)]})
+        importer.commit({"library": str(lib), "character": "阿罗娜", "files": [upload(gpt)]})
 
 
 def test_commit_new_character_needs_both_weights_and_a_valid_name(lib, pkg):
     with pytest.raises(ValueError, match="至少"):
-        importer.commit({"library": str(lib), "character": "X", "files": [local(pkg / "GPT_weights_v2" / "ALuoNa-e15.ckpt")]})
+        importer.commit({"library": str(lib), "character": "X", "files": [upload(pkg / "GPT_weights_v2" / "ALuoNa-e15.ckpt")]})
     # U+202E and zero-width characters make a name display as something else.
     for bad in ("a/b", "CON", "x.", "..", "", "evil\u202egnp.wav", "阿\u200b罗娜", "\ufeffx"):
         with pytest.raises(ValueError):
             importer.safe_name(bad)
     assert importer.safe_name("阿罗娜 v2") == "阿罗娜 v2"
     with pytest.raises(ValueError, match="角色库"):
-        importer.commit({"library": str(pkg), "character": "X", "files": [local(pkg / "GPT_weights_v2" / "ALuoNa-e15.ckpt")]})
+        importer.commit({"library": str(pkg), "character": "X", "files": [upload(pkg / "GPT_weights_v2" / "ALuoNa-e15.ckpt")]})
 
 
 def test_commit_adds_files_to_an_existing_character(lib, pkg):
     make_char(lib, "普拉娜", settings={"aliases": ["普拉娜"], "emotions": {"平静": {"audio": "ref/b.wav"}}})
-    c = importer.commit({"target": "普拉娜", "files": [local(pkg / "ref" / "Happy.wav")],
+    c = importer.commit({"target": "普拉娜", "files": [upload(pkg / "ref" / "Happy.wav")],
                          "settings": {"emotions": {"开心": {"file": 0}}}})
     assert set(c["emotions"]) >= {"平静", "开心"}
     saved = settings.load(str(lib / "普拉娜"))
     assert saved["aliases"] == ["普拉娜"] and saved["emotions"]["开心"] == {"audio": "参考音频/Happy.wav"}
 
     # The same file again is skipped; a different file under that name is refused.
-    again = importer.commit_report({"target": "普拉娜", "files": [local(pkg / "ref" / "Happy.wav")]})
+    again = importer.commit_report({"target": "普拉娜", "files": [upload(pkg / "ref" / "Happy.wav")]})
     assert again["skipped"] == ["参考音频/Happy.wav"] and again["merged"] == []
     wav(pkg / "other" / "Happy.wav", 6)
-    assert importer.inspect([local(pkg / "other" / "Happy.wav")], "普拉娜")["files"][0]["existing"] == "different"
+    assert importer.inspect([upload(pkg / "other" / "Happy.wav")], "普拉娜")["files"][0]["existing"] == "different"
     with pytest.raises(importer.Conflict, match="内容不同"):
-        importer.commit({"target": "普拉娜", "files": [local(pkg / "other" / "Happy.wav")]})
+        importer.commit({"target": "普拉娜", "files": [upload(pkg / "other" / "Happy.wav")]})
 
 
 def test_files_can_be_renamed_on_import(lib, pkg):
     """Two clips both called ``Happy.wav`` (one per emotion folder) go in under different names;
     lines are still found by the file's own name."""
     wav(pkg / "sad" / "Happy.wav", 6)
-    files = [local(pkg / "GPT_weights_v2" / "ALuoNa-e15.ckpt"), local(pkg / "SoVITS_weights_v2" / "ALuoNa_e16_s224.pth"),
-             local(pkg / "ref" / "Talk_3.wav"), {**local(pkg / "ref" / "Talk_3.wav"), "name": "ref_Talk_3.wav"},
-             {**upload(pkg / "sad" / "Happy.wav"), "name": "sad_Happy.wav"}, local(pkg / "ref" / "all.list")]
+    files = [upload(pkg / "GPT_weights_v2" / "ALuoNa-e15.ckpt"), upload(pkg / "SoVITS_weights_v2" / "ALuoNa_e16_s224.pth"),
+             upload(pkg / "ref" / "Talk_3.wav"), {**upload(pkg / "ref" / "Talk_3.wav"), "name": "ref_Talk_3.wav"},
+             {**upload(pkg / "sad" / "Happy.wav"), "name": "sad_Happy.wav"}, upload(pkg / "ref" / "all.list")]
     out = importer.inspect(files)
     assert [f["name"] for f in out["files"]][2:5] == ["Talk_3.wav", "ref_Talk_3.wav", "sad_Happy.wav"]
     assert out["files"][3]["text"] == "通常授業！"  # all.list names Talk_3.wav
@@ -147,29 +143,29 @@ def test_files_can_be_renamed_on_import(lib, pkg):
     assert (lib / "阿罗娜" / "参考音频" / "sad_Happy.wav").is_file()
     for bad in ("sad.txt", "a/b.wav", ""):
         with pytest.raises(ValueError):
-            importer.inspect([{**local(pkg / "ref" / "Happy.wav"), "name": bad}])
+            importer.inspect([{**upload(pkg / "ref" / "Happy.wav"), "name": bad}])
 
 
 def test_adding_clips_one_by_one_reuses_and_merges_the_annotation_file(lib, pkg):
     # First clip with the package's annotation file: the file is copied once.
     importer.commit({"library": str(lib), "character": "阿罗娜",
-                     "files": [local(pkg / "GPT_weights_v2" / "ALuoNa-e15.ckpt"),
-                               local(pkg / "SoVITS_weights_v2" / "ALuoNa_e16_s224.pth"),
-                               local(pkg / "ref" / "Talk_3.wav"), local(pkg / "ref" / "all.list")]})
+                     "files": [upload(pkg / "GPT_weights_v2" / "ALuoNa-e15.ckpt"),
+                               upload(pkg / "SoVITS_weights_v2" / "ALuoNa_e16_s224.pth"),
+                               upload(pkg / "ref" / "Talk_3.wav"), upload(pkg / "ref" / "all.list")]})
     listed = lib / "阿罗娜" / "参考音频" / "all.list"
 
     # A second clip alone: its line comes from the list the character already has.
     wav(pkg / "ref" / "Talk_4.wav", 5)
     (pkg / "ref" / "all.list").write_text("/x/Talk_3.wav|s|JA|通常授業！\n/x/Talk_4.wav|s|JA|おはよう\n", encoding="utf-8")
     listed.write_text(listed.read_text(encoding="utf-8").replace("\n", "") + "\n/x/Talk_4.wav|s|JA|おはよう\n", encoding="utf-8")
-    out = importer.inspect([local(pkg / "ref" / "Talk_4.wav")], "阿罗娜")
+    out = importer.inspect([upload(pkg / "ref" / "Talk_4.wav")], "阿罗娜")
     assert out["files"][0]["text"] == "おはよう" and out["files"][0]["existing"] is None
     assert out["problems"] == []  # no weights needed when adding
 
     # The list again, with one more line: merged, not copied a second time.
     (pkg / "ref" / "all.list").write_text("/x/Talk_3.wav|s|JA|通常授業！\n/x/Talk_4.wav|s|JA|おはよう\n/x/Talk_5.wav|s|JA|またね\n", encoding="utf-8")
-    assert importer.inspect([local(pkg / "ref" / "all.list")], "阿罗娜")["files"][0]["existing"] == "merge"
-    report = importer.commit_report({"target": "阿罗娜", "files": [local(pkg / "ref" / "Talk_4.wav"), local(pkg / "ref" / "all.list")]})
+    assert importer.inspect([upload(pkg / "ref" / "all.list")], "阿罗娜")["files"][0]["existing"] == "merge"
+    report = importer.commit_report({"target": "阿罗娜", "files": [upload(pkg / "ref" / "Talk_4.wav"), upload(pkg / "ref" / "all.list")]})
     assert report["merged"] == ["参考音频/all.list"]
     lines = listed.read_text(encoding="utf-8").splitlines()
     assert lines == ["/x/Talk_3.wav|s|JA|通常授業！", "/x/Talk_4.wav|s|JA|おはよう", "/x/Talk_5.wav|s|JA|またね"]
@@ -178,9 +174,9 @@ def test_adding_clips_one_by_one_reuses_and_merges_the_annotation_file(lib, pkg)
 
 def test_failed_commit_undoes_merged_lines(lib, pkg, monkeypatch):
     importer.commit({"library": str(lib), "character": "阿罗娜",
-                     "files": [local(pkg / "GPT_weights_v2" / "ALuoNa-e15.ckpt"),
-                               local(pkg / "SoVITS_weights_v2" / "ALuoNa_e16_s224.pth"),
-                               local(pkg / "ref" / "Talk_3.wav"), local(pkg / "ref" / "all.list")]})
+                     "files": [upload(pkg / "GPT_weights_v2" / "ALuoNa-e15.ckpt"),
+                               upload(pkg / "SoVITS_weights_v2" / "ALuoNa_e16_s224.pth"),
+                               upload(pkg / "ref" / "Talk_3.wav"), upload(pkg / "ref" / "all.list")]})
     listed = lib / "阿罗娜" / "参考音频" / "all.list"
     before = listed.read_bytes()
     (pkg / "ref" / "all.list").write_text("/x/Talk_3.wav|s|JA|通常授業！\n/x/Talk_5.wav|s|JA|またね\n", encoding="utf-8")
@@ -190,7 +186,7 @@ def test_failed_commit_undoes_merged_lines(lib, pkg, monkeypatch):
 
     monkeypatch.setattr(settings, "save", broken_save)
     with pytest.raises(OSError):
-        importer.commit({"target": "阿罗娜", "files": [local(pkg / "ref" / "all.list"), local(pkg / "ref" / "Happy.wav")],
+        importer.commit({"target": "阿罗娜", "files": [upload(pkg / "ref" / "all.list"), upload(pkg / "ref" / "Happy.wav")],
                          "settings": {"emotions": {"开心": {"file": 1}}}})
     assert listed.read_bytes() == before
     assert not (lib / "阿罗娜" / "参考音频" / "Happy.wav").exists()
@@ -207,8 +203,8 @@ def test_failed_commit_leaves_the_library_as_it_was(lib, pkg, monkeypatch):
     monkeypatch.setattr(settings, "save", broken_save)
     with pytest.raises(OSError):
         importer.commit({"library": str(lib), "character": "阿罗娜", "settings": {"reference": {"file": 2}},
-                         "files": [local(pkg / "GPT_weights_v2" / "ALuoNa-e15.ckpt"),
-                                   local(pkg / "SoVITS_weights_v2" / "ALuoNa_e16_s224.pth"), audio]})
+                         "files": [upload(pkg / "GPT_weights_v2" / "ALuoNa-e15.ckpt"),
+                                   upload(pkg / "SoVITS_weights_v2" / "ALuoNa_e16_s224.pth"), audio]})
     with pytest.raises(OSError):
         importer.commit({"target": "普拉娜", "files": [audio], "settings": {"emotions": {"开心": {"file": 0}}}})
 
@@ -221,13 +217,13 @@ def test_failed_commit_leaves_the_library_as_it_was(lib, pkg, monkeypatch):
 def test_bad_settings_are_rejected_before_anything_is_written(lib, pkg):
     with pytest.raises(ValueError, match="序号"):
         importer.commit({"library": str(lib), "character": "阿罗娜",
-                         "files": [local(pkg / "GPT_weights_v2" / "ALuoNa-e15.ckpt"),
-                                   local(pkg / "SoVITS_weights_v2" / "ALuoNa_e16_s224.pth")],
+                         "files": [upload(pkg / "GPT_weights_v2" / "ALuoNa-e15.ckpt"),
+                                   upload(pkg / "SoVITS_weights_v2" / "ALuoNa_e16_s224.pth")],
                          "settings": {"reference": {"file": 5}}})
     with pytest.raises(ValueError, match="language"):
         importer.commit({"library": str(lib), "character": "阿罗娜",
-                         "files": [local(pkg / "GPT_weights_v2" / "ALuoNa-e15.ckpt"),
-                                   local(pkg / "SoVITS_weights_v2" / "ALuoNa_e16_s224.pth")],
+                         "files": [upload(pkg / "GPT_weights_v2" / "ALuoNa-e15.ckpt"),
+                                   upload(pkg / "SoVITS_weights_v2" / "ALuoNa_e16_s224.pth")],
                          "settings": {"language": "fr"}})
     assert not (lib / "阿罗娜").exists()
     assert set(os.listdir(lib)) <= {importer.STAGING}
@@ -239,8 +235,8 @@ def test_lab_files_and_file_names_give_reference_text(lib, pkg):
     (ref / "Lab_clip.lab").write_text("ラボのテキスト", encoding="utf-8")
     wav(ref / "【开心】先生、おはようございます.wav", 4)
     wav(ref / "Arona_Talk_9.wav", 4)
-    out = importer.inspect([local(ref / "Lab_clip.wav"), local(ref / "Lab_clip.lab"),
-                            local(ref / "【开心】先生、おはようございます.wav"), local(ref / "Arona_Talk_9.wav")])
+    out = importer.inspect([upload(ref / "Lab_clip.wav"), upload(ref / "Lab_clip.lab"),
+                            upload(ref / "【开心】先生、おはようございます.wav"), upload(ref / "Arona_Talk_9.wav")])
     by_name = {f["name"]: f for f in out["files"]}
     assert (by_name["Lab_clip.wav"]["text"], by_name["Lab_clip.wav"]["text_source"]) == ("ラボのテキスト", "lab")
     assert by_name["Lab_clip.lab"]["kind"] == "text"
@@ -271,15 +267,5 @@ def test_inspect_suggests_a_calm_statement_as_reference(lib, pkg):
     wav(clips / "calm.wav", 6)
     (clips / "ask.txt").write_text("これって、問題だと思わない？", encoding="utf-8")
     (clips / "calm.txt").write_text("アルバイトでもしようかな。", encoding="utf-8")
-    out = importer.inspect([local(clips / n) for n in ("ask.wav", "ask.txt", "calm.wav", "calm.txt")])
+    out = importer.inspect([upload(clips / n) for n in ("ask.wav", "ask.txt", "calm.wav", "calm.txt")])
     assert out["suggested"]["reference"] == 2
-
-
-def test_commit_copies_only_from_the_import_folders(lib, pkg, fresh):  # noqa: F811
-    elsewhere = fresh / "elsewhere"
-    elsewhere.mkdir()
-    (elsewhere / "x-e1.ckpt").write_bytes(b"PK" + b"\0" * 10)
-    with pytest.raises(ValueError, match="不在导入文件夹里"):
-        importer.commit({"library": str(lib), "character": "X",
-                         "files": [local(elsewhere / "x-e1.ckpt"), local(pkg / "SoVITS_weights_v2" / "ALuoNa_e16_s224.pth")]})
-    assert not (lib / "X").exists()

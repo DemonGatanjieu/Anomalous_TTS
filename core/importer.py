@@ -1,10 +1,9 @@
 """Build a character folder from dropped or chosen files (docs/INTERFACE.md §5.3).
 
-Three steps: upload (or name a local path inside an import folder, see
-core/paths.import_folders) → inspect → commit. Files are always copied; the
-user's originals are never touched. Uploads are staged inside a
-library (``.anomalous_tts_staging``, skipped by discovery) so commit can rename
-them into place instead of copying them a second time.
+Three steps: upload → inspect → commit. Only uploaded files are imported: no
+request names a file on this computer, so none can make the node read one.
+Uploads are staged inside a library (``.anomalous_tts_staging``, skipped by
+discovery) so commit can rename them into place instead of copying them again.
 
 Commit is all or nothing: everything is assembled in a work folder first and
 moved into place at the end; on any failure placed files are removed again and
@@ -32,7 +31,6 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from . import characters, paths, settings as settings_mod
-from .browse import kind_of
 from .checkpoints import detect_sovits_version
 from .langdetect import detect
 
@@ -45,6 +43,19 @@ _RESERVED = re.compile(r"^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$", re.I)
 # What Windows forbids, plus invisible and direction-changing characters (U+202E can
 # make a name display as something else).
 _BAD_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]')
+
+
+def kind_of(name: str) -> Optional[str]:
+    ext = os.path.splitext(name)[1].lower()
+    if ext == ".ckpt":
+        return "gpt"
+    if ext == ".pth":
+        return "sovits"
+    if ext in characters.AUDIO_EXTS:
+        return "audio"
+    if ext in characters.TEXT_EXTS:
+        return "text"
+    return None
 
 
 class Conflict(ValueError):
@@ -176,13 +187,13 @@ def discard(upload_ids: List[Any]) -> None:
             shutil.rmtree(up.dir, ignore_errors=True)
 
 
-# ---------- sources: an upload or a local path ----------
+# ---------- sources: uploads ----------
 @dataclass
 class Source:
     name: str  # the name inside the character (``spec["name"]`` when given)
     path: str
     kind: str
-    upload: Optional[Upload] = None
+    upload: Upload
     original: str = ""  # the file's own name: lines in annotation files and file names refer to it
 
 
@@ -204,15 +215,7 @@ def _source(spec: Any) -> Source:
         if up.received() != up.size:
             raise ValueError(f"{up.name} 还没有上传完")
         return _renamed(Source(up.name, up.path, kind_of(up.name), up), spec)
-    if isinstance(spec, dict) and isinstance(spec.get("path"), str):
-        path = paths.require_import_path(spec["path"])
-        if not os.path.isfile(path):
-            raise ValueError(f"文件不存在：{paths.norm(path)}")
-        kind = kind_of(path)
-        if not kind:
-            raise ValueError(f"不支持的文件类型：{os.path.basename(path)}")
-        return _renamed(Source(os.path.basename(path), path, kind), spec)
-    raise ValueError('files 里的每一项必须是 {"upload": id} 或 {"path": 路径}，可以另带 "name"')
+    raise ValueError('files 里的每一项必须是 {"upload": id}，可以另带 "name"')
 
 
 def _sources(specs: Any) -> List[Source]:
@@ -431,11 +434,8 @@ def commit_report(body: Dict[str, Any]) -> Dict[str, Any]:
                 continue
             dest = os.path.join(built, *rel.split("/"))
             os.makedirs(os.path.dirname(dest), exist_ok=True)
-            if s.upload:
-                shutil.move(s.path, dest)
-                uploads_now[i] = dest
-            else:
-                shutil.copy2(s.path, dest)
+            shutil.move(s.path, dest)
+            uploads_now[i] = dest
         if body.get("target") is None:
             if merged:
                 settings_mod.save(built, merged)
@@ -475,7 +475,7 @@ def commit_report(body: Dict[str, Any]) -> Dict[str, Any]:
         raise
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    discard([s.upload.id for s in sources if s.upload])
+    discard([s.upload.id for s in sources])
     characters.invalidate()
     found = next((c for c in characters.scan().values() if paths.norm(c.folder).lower() == paths.norm(folder).lower()), None)
     if found is None:
