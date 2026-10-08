@@ -15,8 +15,9 @@
 | `AR/modules/*.py`（5 个） | GPT 的 Transformer 结构 |
 | `module/models.py` 及 `commons` `modules` `attentions` `mrte_model` `quantize` `core_vq` `transforms` `mel_processing` | SoVITS：由语义 token 生成波形 |
 | `text/symbols.py`、`text/symbols2.py` | 音素表 |
-| `text/chinese2.py`、`tone_sandhi.py`、`opencpop-strict.txt`、`zh_normalization/`、`g2pw/`（含多音字词表） | 中文前端：文本规整、分词、变调、儿化、g2pW 多音字 |
-| `text/english.py`、`text/en_normalization/expend.py` | 英语前端（词典首次使用时从同一版本的 GitHub 下载，不放进仓库） |
+| `text/chinese2.py`、`tone_sandhi.py`、`opencpop-strict.txt`、`zh_normalization/`、`g2pw/`（含多音字词表 `polyphonic.rep`、`polyphonic-fix.rep`；上游的 `polyphonic.pickle` 不复制） | 中文前端：文本规整、分词、变调、儿化、g2pW 多音字 |
+| `text/english.py`、`text/en_normalization/expend.py` | 英语前端（CMU 词典首次使用时从同一版本的 GitHub 下载，不放进仓库） |
+| `text/namedict.rep`（脚本生成） | 英语人名读音：上游只有 `namedict_cache.pickle`，同步脚本从固定版本里把它转成文本 |
 | `eres2net/`（4 个文件） | v2Pro / v2ProPlus 的说话人识别模型结构 |
 
 没有复制：训练代码、WebUI、`TTS_infer_pack`（官方推理主流程，由 `core/engine.py` 替代）、v3/v4 的 BigVGAN 和 CFM、UVR5、ASR、`sv.py`（由 `core/engine.py` 的 `sv()` 替代）、`LangSegmenter`（中英混合改用正则切分）。
@@ -37,10 +38,14 @@
    - 同上，`jieba_fast` → `jieba` 兜底。
    - **有意和官方不同**：叠字变轻声只用在真正的叠字上。上游把一个词里任何两个挨着的相同字的第二个读成轻声，jieba 把“银行行长”分成一个词，于是读成 yin2 hang2 hang5 zhang3。现在 3 个字以内的词照旧；4 个字以上的词只有开头两个字相同（好好学习）或 AABB（高高兴兴）才变，“银行行长”“人民民主”这种跨了两个词的不变。
 8. `text/g2pw/onnx_api.py`：`requests`、`opencc` 改为用到时才导入；g2pW 只在 CPU 上跑，去掉 `preload_dlls()`（onnxruntime-gpu 要的 CUDA 版本和 torch 自带的不一样时，上游每次都会报一段红字再退回 CPU）。
-9. `text/english.py`：相对 import；词典路径由 `configure(词典目录, 缓存目录)` 指定；`en_G2p()` 改为首次使用时才创建（上游在导入时就加载词典）；词典按 UTF-8 读（上游用系统默认编码，中文 Windows 上是 GBK，第一次生成 `engdict_cache.pickle` 时会报错）。
+9. `text/english.py`：相对 import；CMU 词典的位置由 `configure(词典目录)` 指定；`en_G2p()` 改为首次使用时才创建（上游在导入时就加载词典）；词典按 UTF-8 读（上游用系统默认编码，中文 Windows 上是 GBK）。
 10. `eres2net/ERes2NetV2.py`：相对 import。
-
-英语词典里有两个 pickle（`namedict_cache.pickle`，以及上游预生成的 `engdict_cache.pickle`）。本包只从固定版本的 GitHub 地址下载 `namedict_cache.pickle`；`engdict_cache.pickle` 在本地由 `cmudict.rep` 生成，除非目录里已经有（比如用户自己的 GPT-SoVITS 整合包）。
+11. **数据文件只当数据读，不执行、不反序列化**（ComfyUI-Manager 审核时提出：G2PWModel 是下载来的，界面里添加的文件夹又能决定读哪一份）：
+    - `text/g2pw/utils.py`：g2pW 的 `config.py` 不再执行，只读顶层的 `名字 = 字面量`；
+    - `text/g2pw/onnx_api.py`：`download_and_decompress` 不再自己下载（上游从 ModelScope 的 `master` 下载、不校验）；下载由 `core/paths.py` 做，固定到一个版本，解压前核对 SHA-256；
+    - `text/g2pw/g2pw.py`：多音字词表每次从 `.rep` 文本读，不再用 pickle 缓存，也不再 `eval()`（值是带引号的拼音列表，按文本解析）；
+    - `text/english.py`：CMU 词典每次从 `.rep` 文本建（约 0.25 秒），不再读写 `engdict_cache.pickle`；人名读音读 `namedict.rep`。
+    结果和原来完全一样：多音字 45047 条、人名 19929 条、CMU 词典 143205 条逐条相同，g2pW 的设置项相同，三种语言的音素基准测试不变。旧版本留在 `en_dict` 里的 `engdict_cache.pickle`、`namedict_cache.pickle` 不再读。
 
 `core/t2s_batch.py` 是批量 GPT 解码，改写自 `t2s_model.py` 的 `infer_panel_batch_infer` 和 `infer_panel_naive`：每句用自己的随机数生成器（结果只取决于这一句的种子，和同批的其他句子无关），支持无参考文本，停止规则同 `infer_panel_naive`。测试确认：单句时与官方 `infer_panel_naive` 生成的 token 完全相同；多句批量与逐句结果完全相同（CPU、fp32）。唯一不同：到 54 秒上限被强制截断时，官方会丢掉第一个 token，这里保留。
 

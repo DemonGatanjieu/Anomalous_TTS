@@ -16,6 +16,7 @@
 ```text
 ComfyUI 前端
   web/anomalous_tts.js         节点上的辅助按钮、下拉过滤、标签菜单、角色菜单、警告行
+  locales/zh/                  中文界面：nodeDefs.json（节点名、提示）、main.json（按钮文字），ComfyUI 读
   Anomalous Model Browser      只通过 HTTP 接口和节点输入交流（INTERFACE.md）
 
 ComfyUI Python
@@ -52,7 +53,7 @@ ComfyUI Python
 - `core/engine.py`：推理流程和每句缓存。`core/t2s_batch.py` 是批量 GPT 解码（每句独立随机数），`core/models.py` 是模型加载和 LRU，`core/checkpoints.py` 安全加载权重（`weights_only=True`）并识别版本，`core/text_frontend.py` 是文字 → 音素和 BERT 特征，`core/audio.py` 是读取、重采样、静音和每句的音量统一（拼接时做，缓存里存的是模型原样的声音）。
 - `nodes.py`：只放控件定义和胶水代码。我们的模型不是 ComfyUI 的 ModelPatcher，所以这里包了一层 `comfy.model_management.free_memory`：ComfyUI 要的显存比空余的多时（加载图像模型、点“卸载模型”），先卸掉我们的模型；显存够时留着。
 - `server.py`：路由和响应拼装。耗时的扫描和磁盘操作放进 `run_in_executor`；读写文件的接口先过 `_require_local`。
-- `web/anomalous_tts.js`：节点界面（文字跟随 ComfyUI 的语言，中文或英文）。辅助按钮必须加在所有真实输入之后（ComfyUI 按位置保存控件值）。角色菜单试听参考音频、刷新角色列表，并通过 Anomalous 提供的 `window.anomalous_open_voice` 打开角色（INTERFACE.md 第 6 节）；警告行只在角色出错或缺这个语言的 Python 包时出现，数据来自 `characters` 和 `status`。
+- `web/anomalous_tts.js`：节点界面。文字在代码里是英文，其他语言从 ComfyUI 的 `/i18n` 读（`locales/<语言>/main.json` 的 `anomalousTTS`），跟随 ComfyUI 的语言；节点名和输入提示的翻译在 `locales/<语言>/nodeDefs.json`，由 ComfyUI 前端自己读。旧工作流里的中文选项值打开时换成英文的。辅助按钮必须加在所有真实输入之后（ComfyUI 按位置保存控件值）。角色菜单试听参考音频、刷新角色列表，并通过 Anomalous 提供的 `window.anomalous_open_voice` 打开角色（INTERFACE.md 第 6 节）；警告行只在角色出错或缺这个语言的 Python 包时出现，数据来自 `characters` 和 `status`。
 
 ## 不能破的规矩
 

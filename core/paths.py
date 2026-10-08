@@ -20,6 +20,7 @@ downloaded into ``models/gpt_sovits/pretrained`` on first use or from the UI.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import shutil
@@ -44,8 +45,11 @@ ROBERTA_NAME = "chinese-roberta-wwm-ext-large"
 ROBERTA_FILES = ("config.json", "tokenizer.json", "pytorch_model.bin")
 G2PW_NAME = "G2PWModel"
 G2PW_FILES = ("g2pW.onnx", "config.py", "POLYPHONIC_CHARS.txt", "MONOPHONIC_CHARS.txt")
-# Same source GPT-SoVITS downloads from (text/g2pw/onnx_api.py).
-G2PW_URL = "https://www.modelscope.cn/models/kamiorinn/g2pw/resolve/master/G2PWModel_1.1.zip"
+# The file GPT-SoVITS downloads (text/g2pw/onnx_api.py), pinned to one revision of it and checked
+# against its SHA-256 before it is extracted.
+G2PW_REVISION = "827f4a519b083e3f37c790c938300241e75692d5"
+G2PW_URL = f"https://www.modelscope.cn/models/kamiorinn/g2pw/resolve/{G2PW_REVISION}/G2PWModel_1.1.zip"
+G2PW_SHA256 = "b116f6930a7ee55eef6576a8d8e14bf40c1106583439e8ae924b901512379c64"
 SV_FILE = "pretrained_eres2netv2w24s4ep4.ckpt"
 
 # Pinned to the GPT-SoVITS commit our vendored code comes from (see UPSTREAM.md).
@@ -53,7 +57,7 @@ GSV_COMMIT = "48b1a0169a28582a8984402f82cf438d3bfa6aca"
 JA_USERDICT_URL = (
     f"https://raw.githubusercontent.com/RVC-Boss/GPT-SoVITS/{GSV_COMMIT}/GPT_SoVITS/text/ja_userdic/userdict.csv"
 )
-EN_DICT_FILES = ("cmudict.rep", "cmudict-fast.rep", "engdict-hot.rep", "namedict_cache.pickle")
+EN_DICT_FILES = ("cmudict.rep", "cmudict-fast.rep", "engdict-hot.rep")  # names: vendor text/namedict.rep
 EN_DICT_URL = f"https://raw.githubusercontent.com/RVC-Boss/GPT-SoVITS/{GSV_COMMIT}/GPT_SoVITS/text/{{name}}"
 # nltk_data packages g2p_en / GPT-SoVITS english.py need.
 NLTK_PACKAGES = (
@@ -267,7 +271,7 @@ def sv_path() -> str:
 
 
 def english_dirs():
-    """English G2P data: (dictionary dir, writable cache dir, nltk data dir). Downloads on first use.
+    """English G2P data: (dictionary dir, nltk data dir). Downloads on first use.
 
     nltk_data is fetched directly instead of with nltk.download(): recent NLTK refuses
     downloads through an HTTP proxy, which is common on users' machines.
@@ -281,8 +285,6 @@ def english_dirs():
             for name in EN_DICT_FILES:
                 if not os.path.isfile(os.path.join(dict_dir, name)):
                     _download(EN_DICT_URL.format(name=name), os.path.join(dict_dir, name))
-        cache_dir = os.path.join(pretrained, "en_dict")
-        os.makedirs(cache_dir, exist_ok=True)
 
         nltk_dir = os.path.join(pretrained, "nltk_data")
         for name in _nltk_missing():
@@ -291,17 +293,29 @@ def english_dirs():
             _download(NLTK_URL.format(name=name), target + ".zip")
             with zipfile.ZipFile(target + ".zip") as zf:
                 zf.extractall(os.path.dirname(target))
-        return dict_dir, cache_dir, nltk_dir
+        return dict_dir, nltk_dir
+
+
+def _sha256(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _download_g2pw() -> None:
-    """Called with ``_lock`` held. Leaves nothing half-written on failure."""
+    """Called with ``_lock`` held. Leaves nothing half-written on failure, and extracts nothing
+    whose SHA-256 is not the pinned one."""
     target = _download_target()
     os.makedirs(target, exist_ok=True)
     zip_path = os.path.join(target, "G2PWModel_1.1.zip")
     log.info("[Anomalous_TTS] 下载中文多音字模型 G2PWModel 到 %s ...", target)
     try:
         _download(G2PW_URL, zip_path)
+        digest = _sha256(zip_path)
+        if digest != G2PW_SHA256:
+            raise RuntimeError(f"G2PWModel_1.1.zip is not the expected file (SHA-256 {digest}); nothing was extracted")
         with zipfile.ZipFile(zip_path) as zf:
             zf.extractall(target)
         extracted = os.path.join(target, "G2PWModel_1.1")

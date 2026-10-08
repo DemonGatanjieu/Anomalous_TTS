@@ -7,6 +7,7 @@ Every patch must match exactly once, otherwise the script stops so the change
 can be reviewed by hand. Record the new commit in UPSTREAM.md afterwards.
 """
 import pathlib
+import pickle
 import shutil
 import sys
 
@@ -27,8 +28,7 @@ FILES = [
     "text/zh_normalization/num.py", "text/zh_normalization/phonecode.py",
     "text/zh_normalization/quantifier.py", "text/zh_normalization/text_normlization.py",
     "text/g2pw/__init__.py", "text/g2pw/g2pw.py", "text/g2pw/onnx_api.py", "text/g2pw/dataset.py",
-    "text/g2pw/utils.py", "text/g2pw/polyphonic.pickle", "text/g2pw/polyphonic.rep",
-    "text/g2pw/polyphonic-fix.rep", "text/g2pw/polyphonic.md5",
+    "text/g2pw/utils.py", "text/g2pw/polyphonic.rep", "text/g2pw/polyphonic-fix.rep",
     # English front end (dictionaries are downloaded at run time, see core/paths.py)
     "text/english.py", "text/en_normalization/expend.py",
     # v2Pro / v2ProPlus speaker embedding
@@ -38,6 +38,14 @@ for f in FILES:
     (ROOT / f).parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(SRC / f, ROOT / f)
 shutil.copyfile(SRC.parent / "LICENSE", ROOT / "LICENSE")
+
+# Upstream ships the English names dictionary only as a pickle. It is turned into text here, from
+# the pinned checkout, so the node itself never unpickles anything (text/english.py reads the text).
+with open(SRC / "text" / "namedict_cache.pickle", "rb") as f:
+    names = pickle.load(f)
+with open(ROOT / "text" / "namedict.rep", "w", encoding="utf-8", newline="\n") as f:
+    for word, pronunciations in sorted(names.items()):
+        f.write(f"{word}  {' '.join(pronunciations[0])}\n")
 
 P = []
 def p(f, old, new): P.append((f, old, new))
@@ -133,7 +141,6 @@ p("text/tone_sandhi.py", "import jieba_fast as jieba\n",
 p("text/zh_normalization/__init__.py", "from text.zh_normalization.text_normlization import *", "from .text_normlization import *")
 p("text/g2pw/__init__.py", "from text.g2pw.g2pw import *", "from .g2pw import *")
 p("text/g2pw/onnx_api.py", "import requests\nfrom opencc import OpenCC\n", "")
-p("text/g2pw/onnx_api.py", "        with requests.get(modelscope_url, stream=True) as r:", "        import requests\n\n        with requests.get(modelscope_url, stream=True) as r:")
 p("text/g2pw/onnx_api.py", '            self.cc = OpenCC("s2tw")', '            from opencc import OpenCC\n\n            self.cc = OpenCC("s2tw")')
 p("text/g2pw/onnx_api.py", "try:\n    onnxruntime.preload_dlls()\nexcept Exception:\n    pass\n", "")
 p("text/g2pw/onnx_api.py", """        if "CUDAExecutionProvider" in onnxruntime.get_available_providers():
@@ -168,14 +175,11 @@ p("text/english.py", "current_file_path = os.path.dirname(__file__)\n",
   "current_file_path = os.path.dirname(__file__)\n")
 p("text/english.py", "_g2p = en_G2p()\n\n\ndef g2p(text):\n",
   "_g2p = None  # Anomalous_TTS: built on first use, after configure()\n\n\n"
-  "def configure(dict_dir, cache_dir):\n"
-  "    global CMU_DICT_PATH, CMU_DICT_FAST_PATH, CMU_DICT_HOT_PATH, CACHE_PATH, NAMECACHE_PATH\n"
+  "def configure(dict_dir):\n"
+  "    global CMU_DICT_PATH, CMU_DICT_FAST_PATH, CMU_DICT_HOT_PATH\n"
   "    CMU_DICT_PATH = os.path.join(dict_dir, \"cmudict.rep\")\n"
   "    CMU_DICT_FAST_PATH = os.path.join(dict_dir, \"cmudict-fast.rep\")\n"
-  "    CMU_DICT_HOT_PATH = os.path.join(dict_dir, \"engdict-hot.rep\")\n"
-  "    NAMECACHE_PATH = os.path.join(dict_dir, \"namedict_cache.pickle\")\n"
-  "    cached = os.path.join(dict_dir, \"engdict_cache.pickle\")\n"
-  "    CACHE_PATH = cached if os.path.exists(cached) else os.path.join(cache_dir, \"engdict_cache.pickle\")\n\n\n"
+  "    CMU_DICT_HOT_PATH = os.path.join(dict_dir, \"engdict-hot.rep\")\n\n\n"
   "def g2p(text):\n"
   "    global _g2p\n"
   "    if _g2p is None:\n"
@@ -191,6 +195,183 @@ p("text/english.py", '    with open(CMU_DICT_FAST_PATH) as f:\n',
   '    with open(CMU_DICT_FAST_PATH, encoding="utf-8") as f:\n')
 p("text/english.py", '    with open(CMU_DICT_HOT_PATH) as f:\n',
   '    with open(CMU_DICT_HOT_PATH, encoding="utf-8") as f:\n')
+
+# --- nothing read from data files is executed or unpickled ---
+# g2pW's config.py (inside the downloaded G2PWModel) is read as data: its literal assignments.
+p("text/g2pw/utils.py", """def _load_config(config_path: os.PathLike):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("__init__", config_path)
+    config = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(config)
+    return config
+""", """def _load_config(config_path: os.PathLike):
+    # Anomalous_TTS: the settings are read as data (top-level `name = literal` lines), never executed.
+    import ast
+    import types
+
+    with open(config_path, encoding="utf-8") as f:
+        tree = ast.parse(f.read(), filename=str(config_path))
+    values = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            try:
+                values[node.targets[0].id] = ast.literal_eval(node.value)
+            except ValueError:
+                pass
+    return types.SimpleNamespace(**values)
+""")
+# The model is found or downloaded by core/paths.py (pinned revision, SHA-256 checked); never here.
+p("text/g2pw/onnx_api.py", """def download_and_decompress(model_dir: str = "G2PWModel/"):
+    if not os.path.exists(model_dir):
+        parent_directory = os.path.dirname(model_dir)
+        zip_dir = os.path.join(parent_directory, "G2PWModel_1.1.zip")
+        extract_dir = os.path.join(parent_directory, "G2PWModel_1.1")
+        extract_dir_new = os.path.join(parent_directory, "G2PWModel")
+        print("Downloading g2pw model...")
+        modelscope_url = "https://www.modelscope.cn/models/kamiorinn/g2pw/resolve/master/G2PWModel_1.1.zip"
+        with requests.get(modelscope_url, stream=True) as r:
+            r.raise_for_status()
+            with open(zip_dir, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+
+        print("Extracting g2pw model...")
+        with zipfile.ZipFile(zip_dir, "r") as zip_ref:
+            zip_ref.extractall(parent_directory)
+
+        os.rename(extract_dir, extract_dir_new)
+
+    return model_dir
+""", """def download_and_decompress(model_dir: str = "G2PWModel/"):
+    # Anomalous_TTS: never downloads; core/paths.py fetches G2PWModel at a pinned revision and
+    # checks its SHA-256 before extracting it.
+    if not os.path.exists(model_dir):
+        raise FileNotFoundError(f"G2PWModel not found: {model_dir}")
+    return model_dir
+""")
+# Polyphones: read from the .rep text (lists of quoted pinyin) without eval(), no pickle cache.
+p("text/g2pw/g2pw.py", "import hashlib\nimport pickle\nimport os\n", "import os\nimport re\n")
+p("text/g2pw/g2pw.py", """CACHE_PATH = os.path.join(current_file_path, "polyphonic.pickle")
+PP_DICT_PATH = os.path.join(current_file_path, "polyphonic.rep")
+PP_FIX_DICT_PATH = os.path.join(current_file_path, "polyphonic-fix.rep")
+MD5_PATH = os.path.join(current_file_path, "polyphonic.md5")
+
+def get_file_md5(file_path):
+    if not os.path.exists(file_path):
+        return ""
+    hasher = hashlib.md5()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+""", """PP_DICT_PATH = os.path.join(current_file_path, "polyphonic.rep")
+PP_FIX_DICT_PATH = os.path.join(current_file_path, "polyphonic-fix.rep")
+""")
+p("text/g2pw/g2pw.py", """def cache_dict(polyphonic_dict, file_path):
+    with open(file_path, "wb") as pickle_file:
+        pickle.dump(polyphonic_dict, pickle_file)
+
+
+def get_dict():
+    new_md5 = get_file_md5(PP_DICT_PATH) + get_file_md5(PP_FIX_DICT_PATH)
+    old_md5 = ""
+    if os.path.exists(MD5_PATH):
+        with open(MD5_PATH, "r", encoding="utf-8") as f:
+            old_md5 = f.read().strip()
+    need_rebuild = (not os.path.exists(CACHE_PATH)) or (new_md5 != old_md5)
+
+    if not need_rebuild:
+        with open(CACHE_PATH, "rb") as pickle_file:
+            polyphonic_dict = pickle.load(pickle_file)
+    else:
+        print("Rebuilding Polyphonic Dictionary: " + f"{old_md5} -> {new_md5}")
+        polyphonic_dict = read_dict()
+        cache_dict(polyphonic_dict, CACHE_PATH)
+        with open(MD5_PATH, "w", encoding="utf-8") as f:
+            f.write(new_md5)
+    return polyphonic_dict
+
+
+def read_dict():
+    polyphonic_dict = {}
+    with open(PP_DICT_PATH, encoding="utf-8") as f:
+        line = f.readline()
+        while line:
+            key, value_str = line.split(":")
+            value = eval(value_str.strip())
+            polyphonic_dict[key.strip()] = value
+            line = f.readline()
+    with open(PP_FIX_DICT_PATH, encoding="utf-8") as f:
+        line = f.readline()
+        while line:
+            key, value_str = line.split(":")
+            value = eval(value_str.strip())
+            polyphonic_dict[key.strip()] = value
+            line = f.readline()
+    return polyphonic_dict
+""", """def get_dict():
+    # Anomalous_TTS: read from the .rep text each time, no pickle cache.
+    return read_dict()
+
+
+def read_dict():
+    # Anomalous_TTS: each value is a list of quoted pinyin, read as text instead of eval().
+    polyphonic_dict = {}
+    for path in (PP_DICT_PATH, PP_FIX_DICT_PATH):
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                key, value_str = line.split(":")
+                polyphonic_dict[key.strip()] = re.findall(r"['\\"]([^'\\"]*)['\\"]", value_str)
+    return polyphonic_dict
+""")
+# English: the CMU dictionaries are read from their .rep text, no pickle cache; names come from
+# namedict.rep, which this script writes from upstream's namedict_cache.pickle (below).
+p("text/english.py", "import pickle\nimport os\n", "import os\n")
+p("text/english.py", 'CACHE_PATH = os.path.join(current_file_path, "engdict_cache.pickle")\nNAMECACHE_PATH = os.path.join(current_file_path, "namedict_cache.pickle")\n',
+  'NAMEDICT_PATH = os.path.join(current_file_path, "namedict.rep")  # Anomalous_TTS: text, shipped with the code\n')
+p("text/english.py", """def cache_dict(g2p_dict, file_path):
+    with open(file_path, "wb") as pickle_file:
+        pickle.dump(g2p_dict, pickle_file)
+
+
+def get_dict():
+    if os.path.exists(CACHE_PATH):
+        with open(CACHE_PATH, "rb") as pickle_file:
+            g2p_dict = pickle.load(pickle_file)
+    else:
+        g2p_dict = read_dict_new()
+        cache_dict(g2p_dict, CACHE_PATH)
+
+    g2p_dict = hot_reload_hot(g2p_dict)
+
+    return g2p_dict
+
+
+def get_namedict():
+    if os.path.exists(NAMECACHE_PATH):
+        with open(NAMECACHE_PATH, "rb") as pickle_file:
+            name_dict = pickle.load(pickle_file)
+    else:
+        name_dict = {}
+
+    return name_dict
+""", """def get_dict():
+    # Anomalous_TTS: built from the .rep text each time, no pickle cache.
+    return hot_reload_hot(read_dict_new())
+
+
+def get_namedict():
+    # Anomalous_TTS: one "word  PH PH ..." per line of namedict.rep.
+    name_dict = {}
+    with open(NAMEDICT_PATH, encoding="utf-8") as f:
+        for line in f:
+            word, _, phones = line.rstrip("\\n").partition("  ")
+            if phones:
+                name_dict[word] = [phones.split(" ")]
+    return name_dict
+""")
 
 # --- tone sandhi: the reduplication rule only for whole reduplicated words ---
 # Upstream makes the second of any two same characters in a word neutral, so 银行行长

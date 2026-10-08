@@ -1,4 +1,3 @@
-import pickle
 import os
 import re
 import wordsegment
@@ -20,8 +19,7 @@ current_file_path = os.path.dirname(__file__)
 CMU_DICT_PATH = os.path.join(current_file_path, "cmudict.rep")
 CMU_DICT_FAST_PATH = os.path.join(current_file_path, "cmudict-fast.rep")
 CMU_DICT_HOT_PATH = os.path.join(current_file_path, "engdict-hot.rep")
-CACHE_PATH = os.path.join(current_file_path, "engdict_cache.pickle")
-NAMECACHE_PATH = os.path.join(current_file_path, "namedict_cache.pickle")
+NAMEDICT_PATH = os.path.join(current_file_path, "namedict.rep")  # Anomalous_TTS: text, shipped with the code
 
 
 # 适配中文及 g2p_en 标点
@@ -203,31 +201,19 @@ def hot_reload_hot(g2p_dict):
     return g2p_dict
 
 
-def cache_dict(g2p_dict, file_path):
-    with open(file_path, "wb") as pickle_file:
-        pickle.dump(g2p_dict, pickle_file)
-
-
 def get_dict():
-    if os.path.exists(CACHE_PATH):
-        with open(CACHE_PATH, "rb") as pickle_file:
-            g2p_dict = pickle.load(pickle_file)
-    else:
-        g2p_dict = read_dict_new()
-        cache_dict(g2p_dict, CACHE_PATH)
-
-    g2p_dict = hot_reload_hot(g2p_dict)
-
-    return g2p_dict
+    # Anomalous_TTS: built from the .rep text each time, no pickle cache.
+    return hot_reload_hot(read_dict_new())
 
 
 def get_namedict():
-    if os.path.exists(NAMECACHE_PATH):
-        with open(NAMECACHE_PATH, "rb") as pickle_file:
-            name_dict = pickle.load(pickle_file)
-    else:
-        name_dict = {}
-
+    # Anomalous_TTS: one "word  PH PH ..." per line of namedict.rep.
+    name_dict = {}
+    with open(NAMEDICT_PATH, encoding="utf-8") as f:
+        for line in f:
+            word, _, phones = line.rstrip("\n").partition("  ")
+            if phones:
+                name_dict[word] = [phones.split(" ")]
     return name_dict
 
 
@@ -361,14 +347,11 @@ class en_G2p(G2p):
 _g2p = None  # Anomalous_TTS: built on first use, after configure()
 
 
-def configure(dict_dir, cache_dir):
-    global CMU_DICT_PATH, CMU_DICT_FAST_PATH, CMU_DICT_HOT_PATH, CACHE_PATH, NAMECACHE_PATH
+def configure(dict_dir):
+    global CMU_DICT_PATH, CMU_DICT_FAST_PATH, CMU_DICT_HOT_PATH
     CMU_DICT_PATH = os.path.join(dict_dir, "cmudict.rep")
     CMU_DICT_FAST_PATH = os.path.join(dict_dir, "cmudict-fast.rep")
     CMU_DICT_HOT_PATH = os.path.join(dict_dir, "engdict-hot.rep")
-    NAMECACHE_PATH = os.path.join(dict_dir, "namedict_cache.pickle")
-    cached = os.path.join(dict_dir, "engdict_cache.pickle")
-    CACHE_PATH = cached if os.path.exists(cached) else os.path.join(cache_dir, "engdict_cache.pickle")
 
 
 def g2p(text):

@@ -1,0 +1,44 @@
+{
+  "AnomalousTTS_CharacterSpeech": {
+    "display_name": "角色语音 (GPT-SoVITS)",
+    "description": "用 GPT-SoVITS 角色模型读剧本。\n{开心} 切换情绪，{main} 切回；[角色名] 换人说；[pause:1s] 插入停顿。",
+    "inputs": {
+      "character": {
+        "tooltip": "gpt_sovits 模型文件夹里的角色"
+      },
+      "text": {
+        "tooltip": "剧本。{开心} 切换情绪、{main} 切回；[角色名] 换人说；[pause:1s] 插入停顿。"
+      },
+      "speed": {
+        "tooltip": "语速"
+      },
+      "language": {
+        "tooltip": "auto：按每句文字判断"
+      },
+      "reference_audio": {
+        "tooltip": "主参考音频：角色文件夹里的相对路径，例如 参考音频/xxx.wav。留空：用角色设置里的，或自动挑一条有台词的 3~10 秒音频"
+      },
+      "reference_text": {
+        "tooltip": "主参考的台词。留空：自动查找"
+      },
+      "gpt_weights": {
+        "tooltip": "auto：设置里的，或轮数最大的"
+      },
+      "sovits_weights": {
+        "tooltip": "auto：设置里的，或轮数最大的"
+      },
+      "pause_seconds": {
+        "tooltip": "句与句之间的停顿"
+      },
+      "batch_size": {
+        "tooltip": "一次同时生成几句。显存不够就调小"
+      },
+      "cross_lingual": {
+        "tooltip": "adjust（自动调整）：句子和参考音频不是同一种语言时（比如日语角色说中文），这些句子的 top_k 最多 10、temperature 最多 0.8，更稳；你设得更低时按你的。off：不调整"
+      },
+      "volume": {
+        "tooltip": "normalize（统一音量）：每句的人声都调到约 -20 dBFS（峰值不超过 -1 dBFS），换种子、换句子音量不再忽大忽小。off：保持模型输出的音量"
+      }
+    }
+  }
+}

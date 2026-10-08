@@ -16,7 +16,7 @@ assets/
   chinese-roberta-wwm-ext-large/
   G2PWModel/
   sv/pretrained_eres2netv2w24s4ep4.ckpt
-  en_dict/            cmudict.rep、cmudict-fast.rep、engdict-hot.rep、namedict_cache.pickle
+  en_dict/            cmudict.rep、cmudict-fast.rep、engdict-hot.rep
   nltk_data/          taggers/averaged_perceptron_tagger_eng、taggers/averaged_perceptron_tagger、corpora/cmudict
   character/          任意一个日语 v2 角色：GPT_weights_v2/*.ckpt、SoVITS_weights_v2/*.pth、ref.wav（3~10 秒）、ref.txt（台词）
 ```
@@ -30,7 +30,8 @@ assets/
 | `test_settings.py` | 角色设置文件的校验（含 `replace`）和读写 |
 | `test_planner.py` | 角色识别、情绪、换人、停顿、每句种子、自动挑主参考（避开问句）、读音替换 |
 | `test_audio.py` | 每句音量统一：只看人声部分、峰值上限、静音不动、关掉时原样 |
-| `test_node.py` | 节点输入：只有 character、text 必填，控件顺序不变；`language` 的别名 |
+| `test_node.py` | 节点输入：只有 character、text 必填，控件顺序不变；`language` 的别名；选项是英文，旧工作流里的中文选项值照样能用 |
+| `test_safety.py` | 数据文件不会被当代码执行：g2pW 的 `config.py` 只当数据读；G2PWModel 下载的 SHA-256 不对时什么都不解压；代码里没有 `pickle.load`、`exec_module`、`eval(` |
 | `test_import.py` | 分块上传、检查（版本 / 时长 / 台词 / 建议的主参考）、新建和追加角色、导入时改名、失败时角色库不变 |
 | `test_setup.py` | 底模来源、后台下载、文件夹浏览和批量扫描（跳过规则、报告跳过和太深的文件夹）、试听路径检查、准备状态、只允许本机写入 |
 | `test_storage.py` | 存放位置：改位置、移过去（同盘 / 跨盘、遇到同名停下）、不移时继续读旧位置 |

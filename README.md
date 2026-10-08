@@ -24,7 +24,7 @@
 1. **准备角色**
    - 装了 Anomalous Model Browser：打开它的“角色语音”页，把 GPT、SoVITS 权重和参考音频拖进去，自动建好角色。
    - 只用本节点：按下面“角色文件夹”的样子把模型放进 `ComfyUI/models/gpt_sovits/`。
-2. **添加节点** `角色语音 (GPT-SoVITS)`（分类 `Anomalous/TTS`），选角色，写台词，接 Save Audio 或 Preview Audio。
+2. **添加节点** `角色语音 (GPT-SoVITS)`（英文界面叫 `Character Speech (GPT-SoVITS)`，分类 `Anomalous/TTS`），选角色，写台词，接 Save Audio 或 Preview Audio。
 
 节点上平时只有：角色、台词、种子、语速，以及几个按钮：
 
@@ -119,7 +119,7 @@ gpt_sovits_pretrained:
 |---|---|---|---|
 | 所有 | `chinese-hubert-base` | 190MB | HuggingFace `lj1995/GPT-SoVITS` |
 | 中文 | `chinese-roberta-wwm-ext-large` | 650MB | HuggingFace |
-| 中文多音字 | `G2PWModel` | 600MB | ModelScope |
+| 中文多音字 | `G2PWModel` | 600MB | ModelScope（固定版本，下载后核对 SHA-256） |
 | v2Pro | `sv/pretrained_eres2netv2w24s4ep4.ckpt` | 100MB | HuggingFace |
 | 日语里的英文单词 | `ja_userdic/userdict.csv` | 17MB | GitHub（GPT-SoVITS 固定版本） |
 | 英语 | 英语词典 + nltk 词性数据 | 约 30MB | GitHub |

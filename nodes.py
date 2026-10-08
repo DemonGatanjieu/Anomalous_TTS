@@ -3,6 +3,9 @@ the logic is in core/ (planner → engine).
 
 Class names (``AnomalousTTS_*``) and the ``character`` / ``text`` inputs are part
 of the public contract (docs/INTERFACE.md §1). Do not rename them.
+
+The node's text is English; other languages come from locales/<lang>/nodeDefs.json, which
+ComfyUI's frontend reads.
 """
 
 from __future__ import annotations
@@ -22,16 +25,28 @@ from .core.engine import Engine, SynthesisParams
 log = logging.getLogger("Anomalous_TTS")
 
 AUTO = characters.AUTO
-LANGUAGE_CHOICES = {AUTO: AUTO, "日语": "ja", "中文": "zh", "英语": "en"}
-# Other spellings API callers use for ``language``; matched case-insensitively.
+LANGUAGE_CHOICES = {AUTO: AUTO, "Japanese": "ja", "Chinese": "zh", "English": "en"}
+# Other spellings API callers use for ``language``, and the options' names before they were
+# English (saved workflows); matched case-insensitively.
 LANGUAGE_ALIASES = {
-    AUTO: ["auto", ""],
-    "ja": ["日文", "日本語", "ja", "jp", "japanese"],
-    "zh": ["汉语", "普通话", "zh", "cn", "chinese", "mandarin"],
-    "en": ["英文", "en", "english"],
+    AUTO: ["", "自动"],
+    "ja": ["日语", "日文", "日本語", "ja", "jp", "japanese"],
+    "zh": ["中文", "汉语", "普通话", "zh", "cn", "chinese", "mandarin"],
+    "en": ["英语", "英文", "en", "english"],
 }
-CROSS_LINGUAL_CHOICES = {"自动调整": True, "不调整": False}
-VOLUME_CHOICES = {"统一音量": -20.0, "不调整": None}
+CROSS_LINGUAL_CHOICES = {"adjust": True, "off": False}
+VOLUME_CHOICES = {"normalize": -20.0, "off": None}
+# The options' names before they were English, still taken from saved workflows.
+OLD_AUTO = "自动"
+OLD_CHOICES = {
+    "cross_lingual": {"自动调整": "adjust", "不调整": "off"},
+    "volume": {"统一音量": "normalize", "不调整": "off"},
+}
+
+
+def current_choice(name: str, value) -> str:
+    """A cross_lingual / volume value as today's option (an old name becomes the new one)."""
+    return OLD_CHOICES[name].get(value, value)
 
 
 def resolve_language(value) -> Optional[str]:
@@ -95,49 +110,51 @@ def _adv(options: dict) -> dict:
 
 
 def _relative(value: str, c: characters.Character, chars) -> Optional[str]:
-    """Combo value "角色名/相对路径" -> path relative to ``c``; AUTO -> None."""
-    if not value or value == AUTO:
+    """Combo value "character/relative path" -> path relative to ``c``; AUTO -> None."""
+    if not value or value in (AUTO, OLD_AUTO):
         return None
     owner, rel = characters.split_combo(chars, value)
     if owner.name != c.name:
-        raise ValueError(f"{value} 不属于角色 {c.name}。请重新选择，或选“{AUTO}”。")
+        raise ValueError(f"{value} does not belong to the character {c.name}. Pick another one, or {AUTO!r}.")
     return rel
 
 
 def _reference_path(value: str, c: characters.Character) -> Optional[str]:
     value = (value or "").strip().replace("\\", "/")
-    if not value or value == AUTO:
+    if not value or value in (AUTO, OLD_AUTO):
         return None
     if value not in c.audio:
-        raise ValueError(f"角色 {c.name} 里没有参考音频 {value}（填角色文件夹里的相对路径，或留空自动选择）。")
+        raise ValueError(f"The character {c.name} has no reference clip {value} "
+                         "(give a path inside the character's folder, or leave it empty to pick one).")
     return value
 
 
 class AnomalousTTS_CharacterSpeech:
-    """用 GPT-SoVITS 角色模型读剧本。支持 {情绪}、[角色]、[pause:1s]。"""
+    """Reads a script with GPT-SoVITS character models: {emotion}, [character], [pause:1s]."""
 
     CATEGORY = "Anomalous/TTS"
     RETURN_TYPES = ("AUDIO", "STRING")  # info also goes to the UI output, so /history carries it
     RETURN_NAMES = ("audio", "info")
     FUNCTION = "generate"
     DESCRIPTION = (
-        "用 GPT-SoVITS 角色模型读剧本。\n"
-        "{开心} 切换情绪，{main} 切回；[角色名] 换人说；[pause:1s] 插入停顿。"
+        "Reads a script with GPT-SoVITS character models.\n"
+        "{happy} switches the emotion, {main} switches back; [name] switches the speaker; [pause:1s] inserts a pause."
     )
 
     @classmethod
     def INPUT_TYPES(cls):
         chars = characters.scan()
-        names = list(chars.keys()) or ["（没有找到角色）"]
+        names = list(chars.keys()) or ["(no characters found)"]
         return {
             "required": {
-                "character": (names, {"tooltip": "gpt_sovits 模型文件夹里的角色"}),
+                "character": (names, {"tooltip": "A character in the gpt_sovits models folder"}),
                 "text": (
                     "STRING",
                     {
                         "multiline": True,
                         "default": "",
-                        "tooltip": "剧本。{开心} 切换情绪、{main} 切回；[角色名] 换人说；[pause:1s] 插入停顿。",
+                        "tooltip": "The script. {happy} switches the emotion, {main} switches back; "
+                                   "[name] switches the speaker; [pause:1s] inserts a pause.",
                     },
                 ),
             },
@@ -145,45 +162,56 @@ class AnomalousTTS_CharacterSpeech:
             # is unchanged from when these were required: ComfyUI saves widget values by position.
             "optional": {
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF}),
-                "speed": ("FLOAT", {"default": 1.0, "min": 0.5, "max": 2.0, "step": 0.05, "tooltip": "语速"}),
-                "language": (list(LANGUAGE_CHOICES), _adv({"default": AUTO, "tooltip": "自动：按每句文字判断"})),
+                "speed": ("FLOAT", {"default": 1.0, "min": 0.5, "max": 2.0, "step": 0.05, "tooltip": "Speaking speed"}),
+                "language": (list(LANGUAGE_CHOICES), _adv({"default": AUTO, "tooltip": "auto: decided for each sentence from its text"})),
                 "reference_audio": (
                     "STRING",
                     _adv({
                         "multiline": False,
                         "default": "",
-                        "tooltip": "主参考音频：角色文件夹里的相对路径，例如 参考音频/xxx.wav。留空：用角色设置里的，或自动挑一条有台词的 3~10 秒音频",
+                        "tooltip": "Main reference clip: a path inside the character's folder, e.g. refs/xxx.wav. "
+                                   "Empty: the one in the character's settings, or a 3–10 s clip with a transcript, picked automatically",
                     }),
                 ),
                 "reference_text": (
                     "STRING",
-                    _adv({"multiline": False, "default": "", "tooltip": "主参考的台词。留空：自动查找"}),
+                    _adv({"multiline": False, "default": "", "tooltip": "What the main reference clip says. Empty: looked up automatically"}),
                 ),
-                "gpt_weights": ([AUTO] + characters.combo_values(chars, "gpt"), _adv({"tooltip": "自动：设置里的，或轮数最大的"})),
-                "sovits_weights": ([AUTO] + characters.combo_values(chars, "sovits"), _adv({"tooltip": "自动：设置里的，或轮数最大的"})),
-                "pause_seconds": ("FLOAT", _adv({"default": 0.3, "min": 0.0, "max": 5.0, "step": 0.05, "tooltip": "句与句之间的停顿"})),
+                "gpt_weights": ([AUTO] + characters.combo_values(chars, "gpt"), _adv({"tooltip": "auto: the one in the character's settings, else the most trained"})),
+                "sovits_weights": ([AUTO] + characters.combo_values(chars, "sovits"), _adv({"tooltip": "auto: the one in the character's settings, else the most trained"})),
+                "pause_seconds": ("FLOAT", _adv({"default": 0.3, "min": 0.0, "max": 5.0, "step": 0.05, "tooltip": "Pause between sentences"})),
                 "top_k": ("INT", _adv({"default": 15, "min": 1, "max": 100})),
                 "top_p": ("FLOAT", _adv({"default": 1.0, "min": 0.05, "max": 1.0, "step": 0.05})),
                 "temperature": ("FLOAT", _adv({"default": 1.0, "min": 0.05, "max": 2.0, "step": 0.05})),
                 "repetition_penalty": ("FLOAT", _adv({"default": 1.35, "min": 1.0, "max": 2.0, "step": 0.05})),
-                "batch_size": ("INT", _adv({"default": 8, "min": 1, "max": 64, "tooltip": "一次同时生成几句。显存不够就调小"})),
+                "batch_size": ("INT", _adv({"default": 8, "min": 1, "max": 64, "tooltip": "Sentences generated at once. Lower it when VRAM runs out"})),
                 "cross_lingual": (list(CROSS_LINGUAL_CHOICES), _adv({
-                    "default": "自动调整",
-                    "tooltip": "句子和参考音频不是同一种语言时（比如日语角色说中文），这些句子的 top_k 最多 10、temperature 最多 0.8，更稳；你设得更低时按你的",
+                    "default": "adjust",
+                    "tooltip": "adjust: a sentence in another language than the reference clip (a Japanese character speaking "
+                               "Chinese, say) uses top_k at most 10 and temperature at most 0.8, which is steadier; lower values you set stay",
                 })),
                 "volume": (list(VOLUME_CHOICES), _adv({
-                    "default": "统一音量",
-                    "tooltip": "统一音量：每句的人声都调到约 -20 dBFS（峰值不超过 -1 dBFS），换种子、换句子音量不再忽大忽小。不调整：保持模型输出的音量",
+                    "default": "normalize",
+                    "tooltip": "normalize: each sentence's voice is brought to about -20 dBFS (peaks under -1 dBFS), so a new seed "
+                               "or sentence does not jump in loudness. off: the loudness the model gives",
                 })),
             },
         }
 
     @classmethod
-    def VALIDATE_INPUTS(cls, language=AUTO):
-        """``language`` also takes aliases (日文, ja, japanese, zh, cn, en ...), so ComfyUI's own
-        list check is replaced by this one."""
+    def VALIDATE_INPUTS(cls, language=AUTO, gpt_weights=AUTO, sovits_weights=AUTO, cross_lingual="adjust", volume="normalize"):
+        """These inputs also take other spellings (ja, japanese, zh, cn …) and the options' names from
+        before they were English, so ComfyUI's own list check is replaced by this one."""
         if resolve_language(language) is None:
-            return f"language 只能是 {' / '.join(LANGUAGE_CHOICES)}，或 ja / zh / en 等写法：{language!r}"
+            return f"language must be one of {' / '.join(LANGUAGE_CHOICES)}, or a code such as ja / zh / en: {language!r}"
+        for name, value in (("cross_lingual", cross_lingual), ("volume", volume)):
+            choices = CROSS_LINGUAL_CHOICES if name == "cross_lingual" else VOLUME_CHOICES
+            if current_choice(name, value) not in choices:
+                return f"{name} must be one of {' / '.join(choices)}: {value!r}"
+        chars = characters.scan()
+        for name, kind, value in (("gpt_weights", "gpt", gpt_weights), ("sovits_weights", "sovits", sovits_weights)):
+            if value not in (AUTO, OLD_AUTO) and value not in characters.combo_values(chars, kind):
+                return f"{name}: no such weights file: {value!r}"
         return True
 
     @classmethod
@@ -199,11 +227,11 @@ class AnomalousTTS_CharacterSpeech:
 
     def generate(self, character, text, seed=0, speed=1.0, language=AUTO, reference_audio="", reference_text="",
                  gpt_weights=AUTO, sovits_weights=AUTO, pause_seconds=0.3, top_k=15, top_p=1.0,
-                 temperature=1.0, repetition_penalty=1.35, batch_size=8, cross_lingual="自动调整",
-                 volume="统一音量"):
+                 temperature=1.0, repetition_penalty=1.35, batch_size=8, cross_lingual="adjust",
+                 volume="normalize"):
         chars = characters.scan(max_age=2.0)
         if character not in chars:
-            raise ValueError(f"找不到角色：{character}")
+            raise ValueError(f"Character not found: {character}")
         c = chars[character]
         if c.settings_error:
             log.warning("[Anomalous_TTS] %s", c.settings_error)
@@ -233,8 +261,8 @@ class AnomalousTTS_CharacterSpeech:
             SynthesisParams(
                 top_k=top_k, top_p=top_p, temperature=temperature, repetition_penalty=repetition_penalty,
                 speed=speed, pause_sec=pause_seconds, batch_size=batch_size,
-                cross_lingual=CROSS_LINGUAL_CHOICES.get(cross_lingual, True),
-                loudness_db=VOLUME_CHOICES.get(volume, VOLUME_CHOICES["统一音量"]),
+                cross_lingual=CROSS_LINGUAL_CHOICES.get(current_choice("cross_lingual", cross_lingual), True),
+                loudness_db=VOLUME_CHOICES.get(current_choice("volume", volume), VOLUME_CHOICES["normalize"]),
             ),
             progress=progress,
         )
@@ -249,5 +277,5 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "AnomalousTTS_CharacterSpeech": "角色语音 (GPT-SoVITS)",
+    "AnomalousTTS_CharacterSpeech": "Character Speech (GPT-SoVITS)",
 }

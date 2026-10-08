@@ -15,7 +15,7 @@
 | 项 | 值 |
 |---|---|
 | 节点类名 | `AnomalousTTS_CharacterSpeech`（发布后不改） |
-| 显示名 | 角色语音 (GPT-SoVITS) |
+| 显示名 | Character Speech (GPT-SoVITS)（中文界面里显示“角色语音 (GPT-SoVITS)”，来自 `locales/zh/nodeDefs.json`） |
 | 输出 | `AUDIO`（`{"waveform": [1, 1, T], "sample_rate": int}`）；`info`（文字：生成了几句、用了几句缓存，以及提示，例如角色没有某个情绪、参考没有台词）。`info` 同时作为界面输出 `text` 出现在 `/history` 里 |
 
 Anomalous 推送剧本时只需要设置两个输入：
@@ -25,7 +25,7 @@ Anomalous 推送剧本时只需要设置两个输入：
 | `character` | 下拉 | 值 = 角色名（见第 2 节 `name`） |
 | `text` | 多行文本 | 剧本，语法见第 4 节 |
 
-其他输入都是可选的，都有默认值（通过 `/prompt` 只传这两个也能运行），Anomalous 不需要碰。需要时可以设置：`language`（`自动` / `日语` / `中文` / `英语`，也接受 `ja` / `zh` / `en`、`日文`、`japanese`、`cn`、`english` 等写法）、`seed`（整数）、`speed`（0.5–2.0）、`volume`（`统一音量`：每句人声调到约 -20 dBFS，默认；`不调整`）。
+其他输入都是可选的，都有默认值（通过 `/prompt` 只传这两个也能运行），Anomalous 不需要碰。需要时可以设置：`language`（`auto` / `Japanese` / `Chinese` / `English`，也接受 `ja` / `zh` / `en`、`日文`、`japanese`、`cn`、`english` 等写法）、`seed`（整数）、`speed`（0.5–2.0）、`volume`（`normalize`：每句人声调到约 -20 dBFS，默认；`off`）。下拉选项以前是中文（`自动`、`日语`、`统一音量`、`自动调整`、`不调整` 等），旧名字照样接受。
 
 ## 2. 角色
 
@@ -342,5 +342,6 @@ window.anomalous_open_voice(character)  // → true：已打开浏览器的“�
 - 7（2026-09-26）：`import/inspect` 的 `problems` 不再包含“还缺 GPT / SoVITS 权重”（界面的待办清单自己显示）；`format` 改为 7。
 - 8（2026-09-26）：`import/inspect` 的 `problems` 不再逐条提醒不在 3~10 秒的音频（界面按 `seconds` 自己处理）；`browse?recursive=1` 不进入 GPT-SoVITS 程序和训练用的文件夹；`format` 改为 8。
 - 11（2026-09-29）：剧本语法加 `[take:N]`（只重做一段）；设置文件加 `defaults`（Anomalous 直接生成时用的语言、语速）；`pretrained/download` 必须写 `ids`，空请求体不再下载全部；文件名、角色名不能含不可见字符和改变文字方向的字符（如 U+202E）；`format` 改为 11。
+- 12（2026-10-08）：节点的下拉选项改为英文：`language` 是 `auto` / `Japanese` / `Chinese` / `English`，`gpt_weights`、`sovits_weights` 的自动是 `auto`，`cross_lingual` 是 `adjust` / `off`，`volume` 是 `normalize` / `off`；以前的中文选项名照样接受。显示名改为 `Character Speech (GPT-SoVITS)`，中文界面的名字和提示来自 `locales/zh/`。`format` 改为 12。
 - 10（2026-09-29）：节点除 `character`、`text` 外的输入都改为可选；`language` 接受别名；加 `volume` 输入（默认统一音量）；`info` 也作为界面输出 `text` 进 `/history`。设置文件加 `replace`（读音替换）。自动挑主参考（以及 `import/inspect` 的 `suggested.reference`）改为优先陈述句和 4~8 秒，避开问句；`format` 改为 10。
 - 9（2026-09-26）：`browse?recursive=1` 的 `output`、`temp`、`tools`、`logs`、`GPT_SoVITS` 只在整合包里跳过，别处照常扫描；`runtime`、`pretrained_models` 一律跳过；最多 6 层；结果加 `skipped`、`too_deep`。导入的文件可以带 `name` 改名。加 `GET /anomalous_tts/import/preview`（试听本机音频）。`format` 改为 9。

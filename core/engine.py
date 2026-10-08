@@ -204,14 +204,14 @@ class Engine:
         missing = dependencies.missing("en")
         if missing:
             raise RuntimeError(f"英语需要安装 {'、'.join(missing)}：{dependencies.install_command(missing)}")
-        dict_dir, cache_dir, nltk_dir = self.resources.english_dirs()
+        dict_dir, nltk_dir = self.resources.english_dirs()
         import nltk
 
         if nltk_dir not in nltk.data.path:
             nltk.data.path.insert(0, nltk_dir)
         from ..vendor.gpt_sovits.text import english
 
-        english.configure(dict_dir, cache_dir)
+        english.configure(dict_dir)
         self._en_ready = True
 
     def _prepare_chinese(self) -> None:

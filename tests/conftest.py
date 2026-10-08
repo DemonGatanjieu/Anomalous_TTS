@@ -104,7 +104,7 @@ class AssetResources:
         return str(self.root / "sv" / "pretrained_eres2netv2w24s4ep4.ckpt")
 
     def english_dirs(self):
-        return str(self.root / "en_dict"), str(self.root / "en_dict"), str(self.root / "nltk_data")
+        return str(self.root / "en_dict"), str(self.root / "nltk_data")
 
 
 @pytest.fixture(scope="session")

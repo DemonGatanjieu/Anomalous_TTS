@@ -26,7 +26,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from . import settings as settings_mod
 
-AUTO = "自动"
+AUTO = "auto"
 MAIN = "main"
 AUDIO_EXTS = {".wav", ".flac", ".ogg", ".mp3"}
 MAX_DEPTH = 4

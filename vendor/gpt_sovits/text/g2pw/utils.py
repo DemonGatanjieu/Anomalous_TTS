@@ -84,12 +84,20 @@ def tokenize_and_map(tokenizer, text: str):
 
 
 def _load_config(config_path: os.PathLike):
-    import importlib.util
+    # Anomalous_TTS: the settings are read as data (top-level `name = literal` lines), never executed.
+    import ast
+    import types
 
-    spec = importlib.util.spec_from_file_location("__init__", config_path)
-    config = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(config)
-    return config
+    with open(config_path, encoding="utf-8") as f:
+        tree = ast.parse(f.read(), filename=str(config_path))
+    values = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            try:
+                values[node.targets[0].id] = ast.literal_eval(node.value)
+            except ValueError:
+                pass
+    return types.SimpleNamespace(**values)
 
 
 default_config_dict = {

@@ -6,7 +6,8 @@
 // - a warning line appears only when the character has a problem or its language's
 //   Python packages are missing;
 // - classic canvas: advanced inputs fold behind a toggle (Vue nodes has its own).
-// Text follows ComfyUI's language (Chinese, else English).
+// Text is English here; other languages come from locales/<lang>/main.json ("anomalousTTS"),
+// which ComfyUI serves at /i18n, and follow ComfyUI's language setting.
 // Data: GET /anomalous_tts/characters (summary list, docs/INTERFACE.md §5) and
 // GET /anomalous_tts/status (dependencies), both cached here.
 //
@@ -16,7 +17,15 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
 const NODE = "AnomalousTTS_CharacterSpeech";
-const AUTO = "自动";
+const AUTO = "auto";
+// Option values from before the options were in English. The node still takes them; a workflow
+// that saved one shows the English value when it opens.
+const OLD_VALUES = {
+    language: { "自动": AUTO, "日语": "Japanese", "中文": "Chinese", "英语": "English" },
+    cross_lingual: { "自动调整": "adjust", "不调整": "off" },
+    volume: { "统一音量": "normalize", "不调整": "off" },
+};
+const OLD_AUTO = "自动"; // gpt_weights / sovits_weights / an early reference_audio drop-down
 const FILTERED = ["gpt_weights", "sovits_weights"];
 const PAUSES = ["0.5", "1", "2"];
 const HELPER_PREFIX = "anomalous_tts_";
@@ -24,70 +33,47 @@ const CACHE_MS = 30000;
 const AMB_URL = "https://github.com/DemonGatanjieu/Anomalous_Model_Browser";
 
 const TEXT = {
-    zh: {
-        tags: "插入标签（情绪 / 换人 / 停顿）",
-        tagsCount: "插入标签（{n} 个情绪 / 换人 / 停顿）",
-        tagsTitle: "插入标签",
-        emotions: "情绪",
-        noEmotions: "（还没有标注情绪，可在 Anomalous 里标注）",
-        speakers: "换人说",
-        pauses: "停顿",
-        character: "角色：试听 / 刷新 / 导入与编辑…",
-        characterTitle: "角色：{name}",
-        play: "▶ 试听 {tag}",
-        stop: "■ 停止试听",
-        noClips: "（这个角色还没有参考音频）",
-        refresh: "↻ 刷新角色列表",
-        refreshed: "角色列表已刷新",
-        manage: "✎ 导入或编辑角色（Anomalous Model Browser）",
-        manageInstall: "✎ 导入或编辑角色：需要安装 Anomalous Model Browser",
-        manageHint: "导入角色、标注情绪、改读音需要 Anomalous Model Browser。正在打开它的项目主页。",
-        brokenCharacter: "⚠ 这个角色有问题，点这里查看",
-        missingPackages: "⚠ 缺少 Python 包：{packages}（点这里复制安装命令）",
-        copied: "安装命令已复制。在命令行运行，完成后重启 ComfyUI。",
-        copyFailed: "复制失败，请手动运行：",
-        advancedShow: "▸ 高级参数（语言、参考、权重、采样…）",
-        advancedHide: "▾ 收起高级参数",
-    },
-    en: {
-        tags: "Insert tag (emotion / speaker / pause)",
-        tagsCount: "Insert tag ({n} emotions / speaker / pause)",
-        tagsTitle: "Insert tag",
-        emotions: "Emotion",
-        noEmotions: "(no emotions yet; add them in Anomalous)",
-        speakers: "Switch speaker",
-        pauses: "Pause",
-        character: "Character: listen / reload / import & edit…",
-        characterTitle: "Character: {name}",
-        play: "▶ Listen to {tag}",
-        stop: "■ Stop",
-        noClips: "(this character has no reference clip yet)",
-        refresh: "↻ Reload characters",
-        refreshed: "Character list reloaded",
-        manage: "✎ Import or edit characters (Anomalous Model Browser)",
-        manageInstall: "✎ Import or edit characters: needs Anomalous Model Browser",
-        manageHint: "Importing characters and editing emotions or pronunciations needs Anomalous Model Browser. Opening its project page.",
-        brokenCharacter: "⚠ This character has a problem; click to see it",
-        missingPackages: "⚠ Missing Python packages: {packages} (click to copy the install command)",
-        copied: "Install command copied. Run it in a terminal, then restart ComfyUI.",
-        copyFailed: "Could not copy; run this yourself:",
-        advancedShow: "▸ Advanced (language, reference, weights, sampling…)",
-        advancedHide: "▾ Hide advanced",
-    },
+    tags: "Insert tag (emotion / speaker / pause)",
+    tagsCount: "Insert tag ({n} emotions / speaker / pause)",
+    tagsTitle: "Insert tag",
+    emotions: "Emotion",
+    noEmotions: "(no emotions yet; add them in Anomalous)",
+    speakers: "Switch speaker",
+    pauses: "Pause",
+    character: "Character: listen / reload / import & edit…",
+    characterTitle: "Character: {name}",
+    play: "▶ Listen to {tag}",
+    stop: "■ Stop",
+    noClips: "(this character has no reference clip yet)",
+    refresh: "↻ Reload characters",
+    refreshed: "Character list reloaded",
+    manage: "✎ Import or edit characters (Anomalous Model Browser)",
+    manageInstall: "✎ Import or edit characters: needs Anomalous Model Browser",
+    manageHint: "Importing characters and editing emotions or pronunciations needs Anomalous Model Browser. Opening its project page.",
+    brokenCharacter: "⚠ This character has a problem; click to see it",
+    missingPackages: "⚠ Missing Python packages: {packages} (click to copy the install command)",
+    copied: "Install command copied. Run it in a terminal, then restart ComfyUI.",
+    copyFailed: "Could not copy; run this yourself:",
+    advancedShow: "▸ Advanced (language, reference, weights, sampling…)",
+    advancedHide: "▾ Hide advanced",
 };
 
-function lang() {
-    let locale = "";
+let translations = {}; // ComfyUI's /i18n: every node pack's locale files, by language
+
+function locale() {
+    let value = "";
     try {
-        locale = app.extensionManager?.setting?.get?.("Comfy.Locale") ?? "";
+        value = app.extensionManager?.setting?.get?.("Comfy.Locale") ?? "";
     } catch {
-        locale = "";
+        value = "";
     }
-    return String(locale || navigator.language || "").toLowerCase().startsWith("zh") ? "zh" : "en";
+    return String(value || navigator.language || "en");
 }
 
 function t(key, params = {}) {
-    return TEXT[lang()][key].replace(/\{(\w+)\}/g, (m, k) => (k in params ? String(params[k]) : m));
+    const wanted = locale();
+    const table = translations[wanted]?.anomalousTTS ?? translations[wanted.split("-")[0]]?.anomalousTTS;
+    return (table?.[key] ?? TEXT[key]).replace(/\{(\w+)\}/g, (m, k) => (k in params ? String(params[k]) : m));
 }
 
 function notify(detail, severity = "info") {
@@ -153,7 +139,7 @@ function filterCombos(node) {
         const w = widget(node, name);
         if (!w) continue;
         w._attsAll ??= [...w.options.values];
-        const own = w._attsAll.filter((v) => v !== AUTO && v.startsWith(`${character}/`));
+        const own = w._attsAll.filter((v) => v !== AUTO && v !== OLD_AUTO && v.startsWith(`${character}/`));
         w.options.values = [AUTO, ...own];
         if (w.value !== AUTO && !own.includes(w.value)) w.value = AUTO;
     }
@@ -389,11 +375,36 @@ function migrateSavedValues(node, info) {
     const values = saved.filter((_, i) => i !== 2 && i !== 6);
     real.forEach((w, i) => (w.value = values[i]));
     const ref = widget(node, "reference_audio");
-    if (ref && ref.value === AUTO) ref.value = ""; // was a drop-down, now a path box
+    if (ref && ref.value === OLD_AUTO) ref.value = ""; // was a drop-down, now a path box
+}
+
+function migrateOldOptions(node) {
+    for (const [name, values] of Object.entries(OLD_VALUES)) {
+        const w = widget(node, name);
+        if (w && Object.hasOwn(values, w.value)) w.value = values[w.value];
+    }
+}
+
+/** Reads the translations once ComfyUI is up, then relabels the nodes already on the canvas. */
+async function loadTranslations() {
+    try {
+        const response = await api.fetchApi("/i18n");
+        translations = response.ok ? await response.json() : {};
+    } catch {
+        translations = {};
+    }
+    for (const node of app.graph?._nodes ?? []) {
+        if (node.type !== NODE) continue;
+        applyAdvanced(node);
+        refreshLabels(node);
+    }
 }
 
 app.registerExtension({
     name: "Anomalous.TTS",
+    async setup() {
+        await loadTranslations();
+    },
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== NODE) return;
         const onNodeCreated = nodeType.prototype.onNodeCreated;
@@ -407,6 +418,7 @@ app.registerExtension({
             const r = onConfigure?.apply(this, arguments);
             setup(this);
             migrateSavedValues(this, info);
+            migrateOldOptions(this);
             filterCombos(this);
             applyAdvanced(this);
             refreshLabels(this);

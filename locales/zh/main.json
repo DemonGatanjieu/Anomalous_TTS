@@ -1,0 +1,27 @@
+{
+  "anomalousTTS": {
+    "tags": "插入标签（情绪 / 换人 / 停顿）",
+    "tagsCount": "插入标签（{n} 个情绪 / 换人 / 停顿）",
+    "tagsTitle": "插入标签",
+    "emotions": "情绪",
+    "noEmotions": "（还没有标注情绪，可在 Anomalous 里标注）",
+    "speakers": "换人说",
+    "pauses": "停顿",
+    "character": "角色：试听 / 刷新 / 导入与编辑…",
+    "characterTitle": "角色：{name}",
+    "play": "▶ 试听 {tag}",
+    "stop": "■ 停止试听",
+    "noClips": "（这个角色还没有参考音频）",
+    "refresh": "↻ 刷新角色列表",
+    "refreshed": "角色列表已刷新",
+    "manage": "✎ 导入或编辑角色（Anomalous Model Browser）",
+    "manageInstall": "✎ 导入或编辑角色：需要安装 Anomalous Model Browser",
+    "manageHint": "导入角色、标注情绪、改读音需要 Anomalous Model Browser。正在打开它的项目主页。",
+    "brokenCharacter": "⚠ 这个角色有问题，点这里查看",
+    "missingPackages": "⚠ 缺少 Python 包：{packages}（点这里复制安装命令）",
+    "copied": "安装命令已复制。在命令行运行，完成后重启 ComfyUI。",
+    "copyFailed": "复制失败，请手动运行：",
+    "advancedShow": "▸ 高级参数（语言、参考、权重、采样…）",
+    "advancedHide": "▾ 收起高级参数"
+  }
+}

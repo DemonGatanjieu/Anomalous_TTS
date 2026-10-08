@@ -26,8 +26,8 @@ class Resources(Protocol):
 
     def sv_path(self) -> str: ...
 
-    def english_dirs(self) -> Tuple[str, str, str]:
-        """(dictionary dir, writable cache dir, nltk data dir)"""
+    def english_dirs(self) -> Tuple[str, str]:
+        """(dictionary dir, nltk data dir)"""
 
 
 class LRU(OrderedDict):
