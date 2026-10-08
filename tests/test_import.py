@@ -4,17 +4,17 @@ import os
 
 import pytest
 
-from Anomalous_TTS.core import characters, importer, settings, storage
+from Anomalous_TTS.core import characters, importer, settings
 
 from test_planner import make_char, wav
-from test_setup import fresh  # noqa: F401  (fixture)
+from test_setup import configure, fresh  # noqa: F401  (fixture)
 
 
 @pytest.fixture
 def lib(fresh):  # noqa: F811
     folder = fresh / "voices"
     folder.mkdir()
-    storage.change(str(folder), move=False)  # imports go to the storage place
+    configure(storage=folder, import_folders=[fresh / "GPT-SoVITS"])  # imports go to the storage place
     return folder
 
 
@@ -265,10 +265,21 @@ def test_text_from_filename_rules():
     assert characters.text_from_filename("Arona_Academy_Talk_3.wav") == ""
 
 
-def test_inspect_suggests_a_calm_statement_as_reference(lib, tmp_path):
-    wav(tmp_path / "ask.wav", 5)
-    wav(tmp_path / "calm.wav", 6)
-    (tmp_path / "ask.txt").write_text("これって、問題だと思わない？", encoding="utf-8")
-    (tmp_path / "calm.txt").write_text("アルバイトでもしようかな。", encoding="utf-8")
-    out = importer.inspect([local(tmp_path / n) for n in ("ask.wav", "ask.txt", "calm.wav", "calm.txt")])
+def test_inspect_suggests_a_calm_statement_as_reference(lib, pkg):
+    clips = pkg / "clips"
+    wav(clips / "ask.wav", 5)
+    wav(clips / "calm.wav", 6)
+    (clips / "ask.txt").write_text("これって、問題だと思わない？", encoding="utf-8")
+    (clips / "calm.txt").write_text("アルバイトでもしようかな。", encoding="utf-8")
+    out = importer.inspect([local(clips / n) for n in ("ask.wav", "ask.txt", "calm.wav", "calm.txt")])
     assert out["suggested"]["reference"] == 2
+
+
+def test_commit_copies_only_from_the_import_folders(lib, pkg, fresh):  # noqa: F811
+    elsewhere = fresh / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "x-e1.ckpt").write_bytes(b"PK" + b"\0" * 10)
+    with pytest.raises(ValueError, match="不在导入文件夹里"):
+        importer.commit({"library": str(lib), "character": "X",
+                         "files": [local(elsewhere / "x-e1.ckpt"), local(pkg / "SoVITS_weights_v2" / "ALuoNa_e16_s224.pth")]})
+    assert not (lib / "X").exists()

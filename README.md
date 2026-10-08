@@ -95,7 +95,18 @@ models/gpt_sovits/
 <details>
 <summary><b>已有的模型和底模</b></summary>
 
-已有的模型不用复制：装了 Anomalous Model Browser 的话，在它的音频页里选存放位置、指定整合包就行，不用重启。也可以在 `ComfyUI/extra_model_paths.yaml` 里加目录：
+已有的模型不用复制。存放位置（导入的角色放在哪）、其他角色文件夹和导入时能浏览的文件夹，写在 `ComfyUI/user/anomalous_tts.json` 里（路径要写完整，改完不用重启）：
+
+```json
+{
+  "format": 1,
+  "storage": "D:/voices",
+  "libraries": ["E:/old voices"],
+  "import_folders": ["D:/GPT-SoVITS"]
+}
+```
+
+这些只能在这个文件里改，网页上改不了；导入时也只能浏览、读取 `import_folders` 里的文件（拖进浏览器的文件不受限制）。整合包的底模可以在 Anomalous 的音频页里指定。也可以在 `ComfyUI/extra_model_paths.yaml` 里加目录：
 
 ```yaml
 anomalous_tts:

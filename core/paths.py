@@ -7,10 +7,13 @@ Character libraries are the roots of ComfyUI's ``gpt_sovits`` model category:
         base_path: D:/voices
         gpt_sovits: characters
 
-and folders from the UI (core/app_config.py, registered without a restart): the
-storage place, where imported characters go (default ``models/gpt_sovits``;
-core/storage.py changes it and moves characters), and earlier storage places
-that still hold characters.
+and folders the user wrote in ``ComfyUI/user/anomalous_tts.json``
+(core/app_config.py, searched without a restart): the storage place, where
+imported characters go (default ``models/gpt_sovits``), and more folders with
+characters. No request changes them.
+
+Import folders (also from that file) are the only places the import routes list
+and read files from (``import_root``).
 
 Pretrained files are looked up under every library (``<root>/pretrained/<name>``
 or ``<root>/<name>``) and in GPT-SoVITS packages added as pretrained sources
@@ -97,19 +100,21 @@ def register() -> None:
         if os.path.isdir(folder):
             folder_paths.add_model_folder_path(CATEGORY, folder)
         else:
-            log.warning("[Anomalous_TTS] 找不到角色库 %s，已跳过（可以在 Anomalous 里移除）。", folder)
+            log.warning("[Anomalous_TTS] 找不到角色库 %s，已跳过（可以在 %s 里删掉）。", folder, app_config.path())
     _sources[:] = config["pretrained"]
 
 
-def _register_storage() -> None:
-    """A storage place that was missing at startup (unplugged disk) is searched once it is back."""
-    folder = app_config.load()["storage"]
-    if folder and os.path.isdir(folder):
-        register_folder(folder)
+def _register_configured() -> None:
+    """Folders added to the settings file, or missing at startup (unplugged disk), are searched
+    once they are there."""
+    config = app_config.load()
+    for folder in ([config["storage"]] if config["storage"] else []) + config["libraries"]:
+        if os.path.isdir(folder):
+            register_folder(folder)
 
 
 def roots() -> List[str]:
-    _register_storage()
+    _register_configured()
     try:
         paths = folder_paths.get_folder_paths(CATEGORY)
     except KeyError:
@@ -133,7 +138,7 @@ def storage() -> str:
 def libraries() -> List[Dict]:
     """Every folder searched for characters: where it comes from, and which one is the storage place
     (listed even while it is missing, then not writable)."""
-    _register_storage()
+    _register_configured()
     config = app_config.load()
     added = {_key(p) for p in config["libraries"]}
     default, current = _key(_default_library()), _key(storage())
@@ -164,21 +169,27 @@ def register_folder(folder: str) -> None:
         folder_paths.add_model_folder_path(CATEGORY, norm(folder))
 
 
-def keep_library(folder: str) -> None:
-    """Keep reading an earlier storage place that still holds characters."""
-    if not any(same_folder(p, folder) for p in app_config.load()["libraries"]):
-        app_config.add("libraries", norm(folder))
-    register_folder(folder)
+# ---------- import folders ----------
+def import_folders() -> List[str]:
+    """The folders imports may read from, as the user listed them (existing ones only)."""
+    return [norm(p) for p in app_config.load()["import_folders"] if os.path.isdir(p)]
 
 
-def forget_library(folder: str) -> None:
-    """Stop reading a place kept by keep_library. Its files are not touched."""
-    stored = next((p for p in app_config.load()["libraries"] if same_folder(p, folder)), None)
-    if stored is None:
-        raise ValueError(f"只能移除以前的存放位置：{folder}")
-    app_config.remove("libraries", stored)
-    registered = folder_paths.folder_names_and_paths[CATEGORY][0]
-    registered[:] = [p for p in registered if not same_folder(p, stored)]
+def import_root(path: str) -> Optional[str]:
+    """The import folder that holds ``path``, or None. Links are followed first, so a link inside
+    an import folder that points elsewhere does not count as inside."""
+    real = os.path.realpath(path)
+    for root in import_folders():
+        if is_inside(real, os.path.realpath(root)):
+            return root
+    return None
+
+
+def require_import_path(path: str) -> str:
+    """``path`` as an absolute path when it is inside an import folder, else ValueError."""
+    if not path or import_root(path) is None:
+        raise ValueError(f"不在导入文件夹里：{norm(path or '')}。可以导入的文件夹写在 {app_config.path()} 的 import_folders 里")
+    return os.path.abspath(path)
 
 
 # ---------- pretrained lookup ----------

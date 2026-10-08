@@ -1,5 +1,7 @@
 """Setup from the UI: pretrained sources, downloads, folder browsing, status (storage: test_storage.py)."""
 
+import json
+import os
 import time
 import types
 
@@ -8,7 +10,7 @@ import pytest
 from aiohttp import web
 
 from Anomalous_TTS import server
-from Anomalous_TTS.core import app_config, browse, characters, downloads, paths, storage
+from Anomalous_TTS.core import app_config, browse, characters, downloads, importer, paths
 
 from test_planner import make_char
 
@@ -17,7 +19,6 @@ from test_planner import make_char
 def fresh(tmp_path, monkeypatch):
     """Empty user directory and only the default library, restored afterwards."""
     monkeypatch.setattr(folder_paths, "get_user_directory", lambda: str(tmp_path / "user"))
-    monkeypatch.setattr(storage, "_job", None)
     registered = folder_paths.folder_names_and_paths[paths.CATEGORY][0]
     saved, saved_sources = list(registered), list(paths._sources)
     registered[:] = [p for p in registered if paths._key(p) == paths._key(paths._default_library())]
@@ -27,6 +28,14 @@ def fresh(tmp_path, monkeypatch):
     registered[:] = saved
     paths._sources[:] = saved_sources
     characters.invalidate()
+
+
+def configure(**fields):
+    """Write the settings file the way a user does (folders as plain strings)."""
+    data = {"format": 1, **{k: [str(p) for p in v] if isinstance(v, list) else str(v) for k, v in fields.items()}}
+    os.makedirs(os.path.dirname(app_config.path()), exist_ok=True)
+    with open(app_config.path(), "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False)
 
 
 def _fake_package(root):
@@ -105,6 +114,7 @@ def test_browse_lists_folders_and_usable_files(fresh):
     (folder / ".git").mkdir()
     for name in ("a-e15.ckpt", "b_e8_s100.pth", "ref.wav", "all.list", "readme.md"):
         (folder / name).write_bytes(b"xx")
+    configure(import_folders=[fresh])
     out = browse.listing(str(folder))
     assert out["path"] == paths.norm(str(folder))
     assert out["parent"] == paths.norm(str(fresh))
@@ -112,15 +122,60 @@ def test_browse_lists_folders_and_usable_files(fresh):
     assert {f["name"]: f["kind"] for f in out["files"]} == {
         "a-e15.ckpt": "gpt", "b_e8_s100.pth": "sovits", "ref.wav": "audio", "all.list": "text"}
 
-    assert browse.listing(None)["dirs"]  # drives, or "/"
     with pytest.raises(ValueError):
         browse.listing(str(fresh / "nope"))
+
+
+def test_browsing_stays_inside_the_import_folders(fresh):
+    inside, outside = fresh / "GPT-SoVITS", fresh / "private"
+    (inside / "ref").mkdir(parents=True)
+    outside.mkdir()
+    (outside / "secret.wav").write_bytes(b"x")
+    assert browse.listing(None)["dirs"] == []  # nothing configured: nothing to list
+    configure(import_folders=[inside, fresh / "unplugged"])
+    top = browse.listing(None)
+    assert (top["dirs"], top["parent"]) == ([paths.norm(str(inside))], None)  # not the drives
+    assert browse.listing(str(inside))["parent"] == ""  # up from an import folder: the list above
+    assert browse.listing(str(inside / "ref"))["parent"] == paths.norm(str(inside))
+    for bad in (str(fresh), str(outside), str(inside / ".." / "private")):
+        with pytest.raises(ValueError, match="不在导入文件夹里"):
+            browse.listing(bad)
+        with pytest.raises(ValueError, match="不在导入文件夹里"):
+            browse.scan(bad)
+    with pytest.raises(ValueError, match="不在导入文件夹里"):
+        browse.scan("")
+    with pytest.raises(ValueError, match="不在导入文件夹里"):
+        browse.audio_file(str(outside / "secret.wav"))
+    with pytest.raises(ValueError, match="不在导入文件夹里"):
+        importer.inspect([{"path": str(outside / "secret.wav")}])
+
+
+def test_a_link_inside_an_import_folder_does_not_lead_out(fresh):
+    inside, outside = fresh / "in", fresh / "out"
+    inside.mkdir()
+    outside.mkdir()
+    (outside / "secret.wav").write_bytes(b"x")
+    try:
+        os.symlink(outside / "secret.wav", inside / "link.wav")
+        os.symlink(outside, inside / "linked", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("cannot make links here")
+    configure(import_folders=[inside])
+    assert browse.listing(str(inside))["dirs"] == []  # linked folders are not listed
+    for bad in (inside / "link.wav", inside / "linked" / "secret.wav"):
+        with pytest.raises(ValueError, match="不在导入文件夹里"):
+            browse.audio_file(str(bad))
+        with pytest.raises(ValueError, match="不在导入文件夹里"):
+            importer.inspect([{"path": str(bad)}])
+    with pytest.raises(ValueError, match="不在导入文件夹里"):
+        browse.scan(str(inside / "linked"))
 
 
 def test_browse_scan_lists_usable_files_with_their_folders(fresh):
     root = fresh / "pkg"
     (root / "GPT_weights_v2").mkdir(parents=True)
     (root / "GPT_weights_v2" / "A-e10.ckpt").write_bytes(b"PK")
+    configure(import_folders=[root])
     (root / "voices" / "A" / ".hidden").mkdir(parents=True)
     (root / "voices" / "A" / "hi.wav").write_bytes(b"x")
     (root / "voices" / "A" / "notes.docx").write_bytes(b"x")
@@ -145,6 +200,7 @@ def test_browse_scan_lists_usable_files_with_their_folders(fresh):
 def test_browse_scan_skips_program_folder_names_only_inside_a_package(fresh):
     """A user's own ``output`` or ``GPT_SoVITS`` folder is scanned; the chosen folder always is."""
     root = fresh / "我的音色"
+    configure(import_folders=[root])
     for folder in ("output/派蒙", "GPT_SoVITS/可莉", "temp", "venv"):
         (root / folder).mkdir(parents=True)
     (root / "output" / "派蒙" / "a.wav").write_bytes(b"x")
@@ -165,6 +221,7 @@ def test_browse_scan_stops_at_the_folder_limit(fresh, monkeypatch):
     for i in range(4):
         (root / f"d{i}").mkdir(parents=True)
         (root / f"d{i}" / "a.wav").write_bytes(b"x")
+    configure(import_folders=[root])
     monkeypatch.setattr(browse, "MAX_FOLDERS", 3)
     out = browse.scan(str(root))
     assert out["truncated"] is True and len(out["files"]) == 2
@@ -175,6 +232,7 @@ def test_import_preview_serves_audio_files_only(fresh):
     clip.parent.mkdir()
     clip.write_bytes(b"x")
     (fresh / "clips" / "w.pth").write_bytes(b"PK")
+    configure(import_folders=[fresh / "clips"])
     assert browse.audio_file(str(clip)) == str(clip)
     for bad in (str(fresh / "clips" / "w.pth"), str(fresh / "clips" / "nope.wav"), str(fresh / "clips"), ""):
         with pytest.raises(ValueError):
@@ -185,10 +243,13 @@ def test_status_counts_characters_per_library(fresh):
     lib = fresh / "voices"
     make_char(lib, "阿罗娜")
     make_char(lib, "普拉娜")
-    storage.change(str(lib), move=False)
+    (fresh / "GPT-SoVITS").mkdir()
+    configure(storage=lib, import_folders=[fresh / "GPT-SoVITS"])
     status = server._status_payload(local=True)
     assert status["format"] == server.API_FORMAT and status["local"] is True
-    assert status["storage"] == paths.norm(str(lib)) and status["move"] is None
+    assert status["storage"] == paths.norm(str(lib))
+    assert status["settings_file"] == app_config.path()
+    assert status["import_folders"] == [paths.norm(str(fresh / "GPT-SoVITS"))]
     counts = {l["path"]: l["characters"] for l in status["libraries"]}
     assert counts[paths.norm(str(lib))] == 2
     assert [p["id"] for p in status["pretrained"]] == list(paths.PRETRAINED_IDS)

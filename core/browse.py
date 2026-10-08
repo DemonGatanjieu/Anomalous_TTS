@@ -1,4 +1,9 @@
-"""Server-side folder listing for "choose a folder" dialogs (the browser cannot see local paths)."""
+"""Server-side folder listing for "choose a folder" dialogs (the browser cannot see local paths).
+
+Only inside the import folders the user wrote in the settings file
+(core/paths.import_folders): the list starts there instead of at the drives, and
+a path outside them is refused, so a request cannot list or read other folders.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +11,7 @@ import os
 from typing import Dict, Optional
 
 from .characters import AUDIO_EXTS, TEXT_EXTS
-from .paths import norm
+from .paths import import_folders, norm, require_import_path, same_folder
 
 MAX_ENTRIES = 5000
 MAX_FOLDERS = 5000  # a scan of a whole drive stops here instead of walking it for minutes
@@ -57,11 +62,10 @@ def _hidden(name: str) -> bool:
 
 
 def listing(path: Optional[str]) -> Dict:
-    """Sub-folders and the files an import can use. No ``path``: the drives (or ``/``)."""
+    """Sub-folders and the files an import can use. No ``path``: the import folders."""
     if not path:
-        drives = os.listdrives() if os.name == "nt" else ["/"]
-        return {"path": "", "parent": None, "dirs": [norm(d) for d in drives], "files": [], "truncated": False}
-    folder = os.path.abspath(path)
+        return {"path": "", "parent": None, "dirs": import_folders(), "files": [], "truncated": False}
+    folder = require_import_path(path)
     if not os.path.isdir(folder):
         raise ValueError(f"文件夹不存在：{norm(folder)}")
     dirs, files = [], []
@@ -79,10 +83,10 @@ def listing(path: Optional[str]) -> Dict:
                 files.append({"name": entry.name, "kind": kind_of(entry.name), "size": entry.stat().st_size})
         except OSError:
             continue
-    parent = os.path.dirname(folder)
+    top = any(same_folder(folder, root) for root in import_folders())
     return {
         "path": norm(folder),
-        "parent": "" if parent == folder else norm(parent),  # "" = the drive list
+        "parent": "" if top else norm(os.path.dirname(folder)),  # "" = the list of import folders
         "dirs": dirs,
         "files": files,
         "truncated": len(entries) > MAX_ENTRIES,
@@ -93,8 +97,8 @@ def scan(path: str) -> Dict:
     """Every usable file under ``path`` (a few levels deep), each with its folder relative to ``path``.
     ``skipped`` and ``too_deep`` name the folders it did not go into (hidden ones aside), so the
     user is told instead of files going missing quietly. ``path`` itself is always scanned."""
-    root = os.path.abspath(path or "")
-    if not path or not os.path.isdir(root):
+    root = require_import_path(path)
+    if not os.path.isdir(root):
         raise ValueError(f"文件夹不存在：{norm(root)}")
     files, skipped, too_deep, truncated, folders = [], [], [], False, 0
     for here, dirs, names in os.walk(root):
@@ -139,7 +143,7 @@ def scan(path: str) -> Dict:
 
 def audio_file(path: str) -> str:
     """``path`` as an absolute path when it is an existing audio file (import preview), else ValueError."""
-    full = os.path.abspath(path or "")
-    if not path or not os.path.isfile(full) or kind_of(full) != "audio":
+    full = require_import_path(path)
+    if not os.path.isfile(full) or kind_of(full) != "audio":
         raise ValueError(f"不是能试听的音频：{norm(full)}")
     return full

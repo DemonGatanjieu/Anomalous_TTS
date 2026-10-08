@@ -1,39 +1,29 @@
-"""One storage place: changing it, moving characters there, and reading places left behind."""
+"""Where characters are kept: only what the user wrote in the settings file, never a request."""
 
-import os
-import time
+import json
 
 import folder_paths
 import pytest
+from aiohttp import web
 
-from Anomalous_TTS.core import app_config, characters, importer, paths, storage
+from Anomalous_TTS import server
+from Anomalous_TTS.core import app_config, characters, importer, paths
 
 from test_planner import make_char
-from test_setup import fresh  # noqa: F401  (fixture)
-
-
-def _wait_move(seconds=10.0):
-    end = time.monotonic() + seconds
-    while time.monotonic() < end:
-        job = storage.state()
-        if job and job["state"] != "moving":
-            return job
-        time.sleep(0.02)
-    raise AssertionError("move did not finish")
+from test_setup import configure, fresh  # noqa: F401  (fixture)
 
 
 def _names():
     return set(characters.scan(max_age=0))
 
 
-def test_storage_defaults_to_models_folder_and_is_remembered(fresh):  # noqa: F811
+def test_storage_comes_from_the_settings_file(fresh):  # noqa: F811
     assert paths.storage() == paths.norm(paths._default_library())
     place = fresh / "voices"
     make_char(place, "阿罗娜")
-    storage.change(str(place), move=False)
+    configure(storage=place)
     assert paths.storage() == paths.norm(str(place))
-    assert app_config.load()["storage"] == paths.norm(str(place))
-    assert "阿罗娜" in _names()
+    assert "阿罗娜" in _names()  # no restart needed
     assert [lib["path"] for lib in paths.libraries() if lib["storage"]] == [paths.norm(str(place))]
 
     registered = folder_paths.folder_names_and_paths[paths.CATEGORY][0]
@@ -42,85 +32,57 @@ def test_storage_defaults_to_models_folder_and_is_remembered(fresh):  # noqa: F8
     assert "阿罗娜" in _names()
 
 
-def test_change_without_moving_keeps_reading_the_old_place(fresh):  # noqa: F811
+def test_more_libraries_come_from_the_settings_file(fresh):  # noqa: F811
     old, new = fresh / "old", fresh / "new"
     make_char(old, "阿罗娜")
     new.mkdir()
-    storage.change(str(old), move=False)
-    storage.change(str(new), move=False)
+    configure(storage=new, libraries=[old])
     assert paths.storage() == paths.norm(str(new))
-    assert app_config.load()["libraries"] == [paths.norm(str(old))]
     assert "阿罗娜" in _names()
     assert {lib["path"]: lib["source"] for lib in paths.libraries()}[paths.norm(str(old))] == "app"
 
-    paths.forget_library(str(old))  # "remove": stop reading it, files stay
-    assert "阿罗娜" not in _names()
-    assert (old / "阿罗娜").is_dir()
-    with pytest.raises(ValueError):
-        paths.forget_library(paths._default_library())
+
+def test_no_route_changes_where_folders_are(fresh):  # noqa: F811
+    routes = web.RouteTableDef()
+    server.register(type("PromptServer", (), {"routes": routes})())
+    posts = {r.path for r in routes if r.method == "POST"}
+    assert "/anomalous_tts/storage" not in posts and "/anomalous_tts/libraries" not in posts
+    assert not any("import_folders" in p for p in posts)
 
 
-def test_change_with_move_moves_every_character(fresh):  # noqa: F811
-    old, new = fresh / "old", fresh / "new"
-    make_char(old / "阿罗娜", "日配")
-    make_char(old / "阿罗娜", "中配")
-    make_char(old, "普拉娜")
-    (old / "notes").mkdir()  # not a character: stays
-    new.mkdir()
-    storage.change(str(old), move=False)
-    storage.change(str(new), move=True)
-    job = _wait_move()
-    assert (job["state"], job["done"], job["total"]) == ("done", 2, 2)
-    assert sorted(os.listdir(new)) == ["普拉娜", "阿罗娜"]
-    assert sorted(os.listdir(old)) == ["notes"]
-    assert _names() == {"阿罗娜/中配", "阿罗娜/日配", "普拉娜"}
-    assert all(paths.is_inside(c.folder, str(new)) for c in characters.scan(max_age=0).values())
-    assert app_config.load()["libraries"] == []  # nothing left to read in the old place
+def test_unusable_entries_in_the_settings_file_are_ignored(fresh):  # noqa: F811
+    configure()
+    with open(app_config.path(), "w", encoding="utf-8") as f:
+        json.dump({"format": 1, "storage": "", "libraries": "voices", "import_folders": ["relative", 3, " "]}, f)
+    config = app_config.load()
+    assert (config["storage"], config["libraries"], config["import_folders"]) == (None, [], [])
+    assert paths.storage() == paths.norm(paths._default_library())  # not ComfyUI's working folder
 
 
-def test_move_stops_at_a_name_clash_and_keeps_that_character(fresh):  # noqa: F811
-    old, new = fresh / "old", fresh / "new"
-    make_char(old, "阿罗娜")
-    make_char(old, "普拉娜")
-    (new / "阿罗娜").mkdir(parents=True)  # moved in name order: 普拉娜 first, then this one clashes
-    storage.change(str(old), move=False)
-    storage.change(str(new), move=True)
-    job = _wait_move()
-    assert job["state"] == "error" and "阿罗娜" in job["error"]
-    assert job["moved"] == ["普拉娜"]
-    assert (old / "阿罗娜" / "GPT_weights_v2").is_dir()  # untouched
-    assert app_config.load()["libraries"] == [paths.norm(str(old))]  # still read
+def test_saving_keeps_what_the_user_wrote(fresh):  # noqa: F811
+    configure(storage=fresh / "voices", import_folders=[fresh / "GPT-SoVITS"])
+    with open(app_config.path(), encoding="utf-8") as f:
+        data = json.load(f)
+    data["note"] = "mine"
+    with open(app_config.path(), "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    app_config.add("pretrained", "D:/GPT-SoVITS/GPT_SoVITS")
+    with open(app_config.path(), encoding="utf-8") as f:
+        saved = json.load(f)
+    assert saved == {**data, "pretrained": ["D:/GPT-SoVITS/GPT_SoVITS"]}
+
+    with open(app_config.path(), "w", encoding="utf-8") as f:
+        f.write('{"storage": "D:/voices",')  # a typo while editing by hand
+    with pytest.raises(ValueError, match="设置文件读不了"):
+        app_config.add("pretrained", "D:/other")
+    with open(app_config.path(), encoding="utf-8") as f:
+        assert f.read() == '{"storage": "D:/voices",'  # not replaced
 
 
-def test_copy_across_disks_counts_bytes_and_removes_the_original(fresh):  # noqa: F811
-    src, dst_root = fresh / "a", fresh / "b"
-    make_char(src, "阿罗娜")
-    dst_root.mkdir()
-    storage._job = {"bytes_done": 0}
-    storage._move_one(str(src / "阿罗娜"), str(dst_root / "阿罗娜"), same_disk=False)
-    assert not (src / "阿罗娜").exists()
-    assert (dst_root / "阿罗娜" / "all.list").is_file()
-    assert storage._job["bytes_done"] > 0
-    assert os.listdir(dst_root / storage.STAGING) == []
-
-
-def test_bad_storage_places_are_refused(fresh):  # noqa: F811
-    place = fresh / "voices"
-    place.mkdir()
-    storage.change(str(place), move=False)
-    with pytest.raises(ValueError, match="不存在"):
-        storage.change(str(fresh / "nope"), move=False)
-    with pytest.raises(ValueError, match="已经"):
-        storage.change(str(place), move=False)
-    (place / "inner").mkdir()
-    with pytest.raises(ValueError, match="里面"):
-        storage.change(str(place / "inner"), move=True)
-
-
-def test_a_missing_storage_place_is_never_swapped_for_another(fresh, tmp_path):
+def test_a_missing_storage_place_is_never_swapped_for_another(fresh, tmp_path):  # noqa: F811
     place = tmp_path / "usb"
     place.mkdir()
-    storage.change(str(place), move=False)
+    configure(storage=place)
     place.rmdir()  # unplugged
     assert paths.storage() == paths.norm(str(place))
     home = next(lib for lib in paths.libraries() if lib["storage"])

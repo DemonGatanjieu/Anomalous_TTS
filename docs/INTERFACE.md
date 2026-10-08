@@ -1,6 +1,6 @@
 # Anomalous_TTS ↔ Anomalous Model Browser 接口约定
 
-版本：11（2026-09-29）
+版本：13（2026-10-08）
 
 两个项目在不同的对话里开发。这份文档是双方唯一的约定：**Anomalous 只依赖这里写的东西**，其余都是 Anomalous_TTS 的内部实现，可以随时改。
 
@@ -29,7 +29,7 @@ Anomalous 推送剧本时只需要设置两个输入：
 
 ## 2. 角色
 
-一个角色 = 一个文件夹，放在某个**角色库**里。角色库就是 ComfyUI 模型分类 `gpt_sovits` 的根目录：默认 `ComfyUI/models/gpt_sovits/`、`extra_model_paths.yaml` 里写的、界面里选的**存放位置**（导入的角色放在这里，见 5.2 `storage`），以及以前的存放位置里还没移走的角色。
+一个角色 = 一个文件夹，放在某个**角色库**里。角色库就是 ComfyUI 模型分类 `gpt_sovits` 的根目录：默认 `ComfyUI/models/gpt_sovits/`、`extra_model_paths.yaml` 里写的，以及节点设置文件 `ComfyUI/user/anomalous_tts.json` 里写的**存放位置**（导入的角色放在这里，见 5.2）和其他角色文件夹。
 
 - 根目录下的每个子文件夹是一个角色；文件夹里（含子文件夹）至少要有一个 `.ckpt`（GPT 权重）和一个 `.pth`（SoVITS 权重）。
 - 如果这个子文件夹下面有 2 个及以上各自带权重的子文件夹（比如日配、中配），每个子文件夹单独算一个角色，名字是 `角色/子文件夹`。
@@ -99,7 +99,7 @@ Anomalous 推送剧本时只需要设置两个输入：
 
 ## 5. HTTP 接口
 
-都挂在 ComfyUI 服务器上（默认 `http://127.0.0.1:8188`）。所有 JSON 响应都带 `"format": 9`。
+都挂在 ComfyUI 服务器上（默认 `http://127.0.0.1:8188`）。所有 JSON 响应都带 `"format": 13`。
 
 标了 🔒 的接口会读写服务器上的文件，只接受本机的请求（`127.0.0.1` / `::1`），其他电脑访问返回 403。`status.local` 告诉界面当前是不是本机。
 
@@ -160,21 +160,35 @@ Anomalous 推送剧本时只需要设置两个输入：
 
 ### 5.2 准备状态（存放位置、底模、依赖）
 
-存放位置、以前的存放位置和底模来源记在 `ComfyUI/user/anomalous_tts.json`（节点自己管理，Anomalous 不直接读写）。
+节点设置文件 `ComfyUI/user/anomalous_tts.json`（路径见 `status.settings_file`）：
+
+```json
+{
+  "format": 1,
+  "storage": "D:/voices",
+  "libraries": ["E:/old voices"],
+  "import_folders": ["D:/GPT-SoVITS", "D:/voice clips"],
+  "pretrained": ["D:/GPT-SoVITS/GPT_SoVITS"]
+}
+```
+
+- `storage`（存放位置）、`libraries`（其他角色文件夹）、`import_folders`（导入文件夹）**只由用户编辑这个文件来设置，没有接口能改**，所以请求决定不了在哪里新建文件夹、能读哪些文件。都要写绝对路径；空的、相对路径、不是字符串的项会被忽略。改了以后不用重启：存放位置和导入文件夹马上生效，新写的角色文件夹马上读取（从文件里删掉的，重启 ComfyUI 后才不再读取）。
+- `pretrained`（底模来源）可以在界面里加、删（`pretrained/source`）。节点写这个文件时只改这一项，其余内容按用户写的保留；文件格式坏了（手改出错）就拒绝写入并返回 400，不覆盖。
+- Anomalous 不直接读写这个文件；要换存放位置或导入文件夹时，告诉用户改这个文件（显示 `status.settings_file`）。
 
 #### `GET /anomalous_tts/status`
 
 ```json
 {
-  "format": 7,
+  "format": 13,
   "local": true,
+  "settings_file": "…/ComfyUI/user/anomalous_tts.json",
   "storage": "D:/voices",
-  "move": { "state": "moving", "from": "…/ComfyUI/models/gpt_sovits", "to": "D:/voices", "total": 29, "done": 3,
-            "current": "阿罗娜", "bytes_total": 0, "bytes_done": 0, "moved": ["伊吹", "优香", "伊蕾娜"], "error": null },
   "libraries": [
     { "path": "…/ComfyUI/models/gpt_sovits", "source": "default", "storage": false, "exists": true, "writable": true, "characters": 26 },
     { "path": "D:/voices", "source": "storage", "storage": true, "exists": true, "writable": true, "characters": 3 }
   ],
+  "import_folders": ["D:/GPT-SoVITS"],
   "pretrained": [
     { "id": "hubert", "label": "chinese-hubert-base", "needed_for": "all", "size": 190000000, "required": true, "state": "ok", "path": "…" },
     { "id": "g2pw", "label": "G2PWModel", "needed_for": "zh", "size": 610000000, "required": false, "state": "downloading", "done": 123000000 }
@@ -189,24 +203,12 @@ Anomalous 推送剧本时只需要设置两个输入：
 
 - 路径一律用 `/` 分隔。
 - `storage`：存放位置，导入的角色放在这里（没设置过就是 `models/gpt_sovits`）。`libraries[].storage` 标出它是哪一项。
-- `libraries[].source`：`default`（`models/gpt_sovits`）、`storage`（设置的存放位置）、`app`（以前的存放位置，还有角色没移走；只有这种能移除）、`yaml`（`extra_model_paths.yaml`）。`characters` 是这里的角色数。
-- `move`：最近一次移动（没有则为 `null`）。`state` 为 `moving` / `done` / `error`；`done` / `total` 按角色计；跨盘移动时 `bytes_done` / `bytes_total` 是已复制 / 总字节数（同盘是改名，都是 0）；`error` 是停下的原因。
+- `libraries[].source`：`default`（`models/gpt_sovits`）、`storage`（设置文件里的存放位置）、`app`（设置文件里的 `libraries`）、`yaml`（`extra_model_paths.yaml`）。`characters` 是这里的角色数。
+- `import_folders`：设置文件里写的导入文件夹中现在存在的那些。`browse`、`import/preview`，以及导入时用 `{"path": …}` 给的文件，都只能在这些文件夹里。为空时只能把文件拖进浏览器上传。
 - `pretrained[].id`：`hubert`、`roberta`、`g2pw`、`sv`、`english`、`ja_userdic`。`needed_for`：`all` / `zh` / `en` / `ja` / `v2pro`。`required: false` 表示缺了也能用，只是效果差一点（g2pw 缺失时多音字改用 pypinyin；日语用户词典缺失时英文单词按字母读）。
 - `pretrained[].state`：`ok`（带 `path`）、`missing`、`queued`、`downloading`（带 `done`，已写入的字节数；`size` 是大约的总大小）、`error`（带 `error`）。
 - `dependencies` 只报告缺哪些包，`command` 是给运行 ComfyUI 的那个 Python 安装它们的命令。节点不替用户安装。
-- 每次实时计算；下载或移动中可以每秒查一次。
-
-#### 🔒 `POST /anomalous_tts/storage`
-
-`{ "path": "D:/voices", "move": true }`：把存放位置改成这个文件夹（必须存在、可写，不能和现在的位置互相包含），以后导入的角色都放这里。
-
-- `move: true`：把现在存放位置里的角色逐个移过去（后台进行，进度看 `status.move`）。同一个盘直接改名；跨盘先复制到新位置的暂存区，放好后再删原来的。新位置已有同名文件夹、或出错时停下，正在移的那个角色留在原处，没移走的继续能用。不是角色的文件夹（例如 `pretrained`）不动。
-- `move: false`：只改以后的位置。原来的位置如果还有角色，继续读取（`libraries` 里 `source: app`）。
-- 移动中再改返回 400。成功返回新的 `status`。
-
-#### 🔒 `POST /anomalous_tts/libraries`
-
-`{ "path": "…", "remove": true }`：不再读取一个以前的存放位置（`source: app`）。**不删除任何文件**，只是不再列出里面的角色。其他来源不能移除；不带 `remove` 返回 400。成功返回新的 `status`。
+- 每次实时计算；下载中可以每秒查一次。
 
 #### 🔒 `POST /anomalous_tts/pretrained/source`
 
@@ -218,29 +220,29 @@ Anomalous 推送剧本时只需要设置两个输入：
 
 #### 🔒 `GET /anomalous_tts/browse?path=<文件夹>`
 
-服务器端的文件夹浏览（浏览器拿不到本机路径），给“选择文件夹 / 文件”用。
+服务器端的文件夹浏览（浏览器拿不到本机路径），给“选择文件夹 / 文件”用。只能浏览导入文件夹（`status.import_folders`）和它们里面的文件夹；其他路径返回 400。
 
 ```json
 { "path": "D:/GPT-SoVITS", "parent": "D:/", "dirs": ["GPT_weights_v2", "SoVITS_weights_v2"],
   "files": [{ "name": "xxx-e15.ckpt", "kind": "gpt", "size": 155000000 }], "truncated": false }
 ```
 
-- 不写 `path`：`dirs` 是所有磁盘（Windows）或 `/`，`parent` 为 `null`。`parent` 为 `""` 表示上一级就是磁盘列表。
-- `files` 只列导入能用的：`gpt`（.ckpt）、`sovits`（.pth）、`audio`（.wav/.flac/.ogg/.mp3）、`text`（.txt/.lab/.list）。隐藏文件夹不列，不进入符号链接。
-- 文件夹不存在或没有权限返回 400。
+- 不写 `path`：`dirs` 是导入文件夹（完整路径），`parent` 为 `null`。`parent` 为 `""` 表示上一级就是导入文件夹列表。
+- `files` 只列导入能用的：`gpt`（.ckpt）、`sovits`（.pth）、`audio`（.wav/.flac/.ogg/.mp3）、`text`（.txt/.lab/.list）。隐藏文件夹不列，不进入符号链接；指向导入文件夹外面的链接当作在外面。
+- 不在导入文件夹里、文件夹不存在或没有权限返回 400。
 - 加 `&recursive=1`：一次列出这个文件夹里（往下最多 6 层）所有能用的文件，给批量导入用：`{ "path": "D:/GPT-SoVITS", "files": [{ "path": "D:/GPT-SoVITS/GPT_weights_v2/xxx-e15.ckpt", "name": "xxx-e15.ckpt", "dir": "GPT_weights_v2", "kind": "gpt", "size": 155000000 }], "truncated": false, "skipped": ["GPT_SoVITS", "logs", "output", "runtime"], "too_deep": [] }`。`dir` 是相对这个文件夹的路径（直接在里面的是 `""`）。最多 5000 个文件、走 5000 个文件夹，超过时 `truncated: true`。
   - 选中的文件夹本身永远会扫描。它下面的文件夹（名字不分大小写）：`runtime`、`pretrained_models`、`__pycache__`、`site-packages`、`venv`、`node_modules` 一律不进入；`GPT_SoVITS`、`logs`、`output`、`TEMP`、`tools` 只在 GPT-SoVITS 整合包里不进入，也就是和它们放在一起的有 `runtime`、`GPT_weights*` / `SoVITS_weights*` 文件夹，或 `webui.py`、`api.py`、`api_v2.py`、`inference_webui.py`、`s1_train.py`、`s2_train.py`。别处同名的文件夹（用户自己的 `output`、按引擎分类的 `GPT_SoVITS`）照常扫描。
   - `skipped` 是因为上面的规则没进入的文件夹，`too_deep` 是超过层数没进入的文件夹（相对路径，各最多 100 个；隐藏文件夹不算）。界面应该把它们告诉用户，而不是让文件悄悄少掉。
 
 #### 🔒 `GET /anomalous_tts/import/preview?path=<音频文件>`
 
-导入时试听用 `browse` 选的本机音频（浏览器拖进来的文件浏览器自己能放）。只给音频文件（.wav/.flac/.ogg/.mp3）；不存在或不是音频返回 400。
+导入时试听用 `browse` 选的本机音频（浏览器拖进来的文件浏览器自己能放）。只给导入文件夹里的音频文件（.wav/.flac/.ogg/.mp3）；不在导入文件夹里、不存在或不是音频返回 400。
 
 ### 5.3 导入角色（一律复制）
 
 把 GPT、SoVITS 权重、参考音频、台词文件做成一个角色，或加到已有角色里。分三步：**上传或指定路径 → 检查 → 创建**。浏览器拖进来的文件走上传；用 `browse` 选的文件直接给路径。原文件永远不动。
 
-每个文件在请求里写成 `{"upload": "<上传 id>"}` 或 `{"path": "<服务器上的绝对路径>"}`。只收 `.ckpt`、`.pth`、音频（.wav/.flac/.ogg/.mp3）、`.txt`、`.lab`、`.list`。
+每个文件在请求里写成 `{"upload": "<上传 id>"}` 或 `{"path": "<服务器上的绝对路径>"}`。`path` 必须在导入文件夹（`status.import_folders`）里，否则 400。只收 `.ckpt`、`.pth`、音频（.wav/.flac/.ogg/.mp3）、`.txt`、`.lab`、`.list`。
 
 两种写法都可以另带 `"name"`：这个文件放进角色里用的名字（比如两个情绪文件夹里都有 `01.wav`，一个改成 `难过_01.wav`）。扩展名必须和原文件一样，名字要合法。`inspect` 返回的 `name` 是新名字；台词还是按原文件名在标注文件里找，同名 `.txt` / `.lab` 按新名字配对（一起改名即可）。
 
@@ -342,6 +344,7 @@ window.anomalous_open_voice(character)  // → true：已打开浏览器的“�
 - 7（2026-09-26）：`import/inspect` 的 `problems` 不再包含“还缺 GPT / SoVITS 权重”（界面的待办清单自己显示）；`format` 改为 7。
 - 8（2026-09-26）：`import/inspect` 的 `problems` 不再逐条提醒不在 3~10 秒的音频（界面按 `seconds` 自己处理）；`browse?recursive=1` 不进入 GPT-SoVITS 程序和训练用的文件夹；`format` 改为 8。
 - 11（2026-09-29）：剧本语法加 `[take:N]`（只重做一段）；设置文件加 `defaults`（Anomalous 直接生成时用的语言、语速）；`pretrained/download` 必须写 `ids`，空请求体不再下载全部；文件名、角色名不能含不可见字符和改变文字方向的字符（如 U+202E）；`format` 改为 11。
+- 13（2026-10-08）：存放位置、其他角色文件夹只由用户编辑 `ComfyUI/user/anomalous_tts.json` 设置：去掉 `POST /anomalous_tts/storage`（以及移动角色）和 `POST /anomalous_tts/libraries`，`status` 去掉 `move`，`libraries[].source: app` 改为指设置文件里的 `libraries`。设置文件加 `import_folders`：`browse`（不写 `path` 时列出导入文件夹，不再列磁盘）、`import/preview`、导入时的 `{"path": …}` 都只能在这些文件夹里。`status` 加 `settings_file`、`import_folders`。`format` 改为 13。
 - 12（2026-10-08）：节点的下拉选项改为英文：`language` 是 `auto` / `Japanese` / `Chinese` / `English`，`gpt_weights`、`sovits_weights` 的自动是 `auto`，`cross_lingual` 是 `adjust` / `off`，`volume` 是 `normalize` / `off`；以前的中文选项名照样接受。显示名改为 `Character Speech (GPT-SoVITS)`，中文界面的名字和提示来自 `locales/zh/`。`format` 改为 12。
 - 10（2026-09-29）：节点除 `character`、`text` 外的输入都改为可选；`language` 接受别名；加 `volume` 输入（默认统一音量）；`info` 也作为界面输出 `text` 进 `/history`。设置文件加 `replace`（读音替换）。自动挑主参考（以及 `import/inspect` 的 `suggested.reference`）改为优先陈述句和 4~8 秒，避开问句；`format` 改为 10。
 - 9（2026-09-26）：`browse?recursive=1` 的 `output`、`temp`、`tools`、`logs`、`GPT_SoVITS` 只在整合包里跳过，别处照常扫描；`runtime`、`pretrained_models` 一律跳过；最多 6 层；结果加 `skipped`、`too_deep`。导入的文件可以带 `name` 改名。加 `GET /anomalous_tts/import/preview`（试听本机音频）。`format` 改为 9。

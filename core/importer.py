@@ -1,7 +1,8 @@
 """Build a character folder from dropped or chosen files (docs/INTERFACE.md §5.3).
 
-Three steps: upload (or name a local path) → inspect → commit. Files are always
-copied; the user's originals are never touched. Uploads are staged inside a
+Three steps: upload (or name a local path inside an import folder, see
+core/paths.import_folders) → inspect → commit. Files are always copied; the
+user's originals are never touched. Uploads are staged inside a
 library (``.anomalous_tts_staging``, skipped by discovery) so commit can rename
 them into place instead of copying them a second time.
 
@@ -204,7 +205,7 @@ def _source(spec: Any) -> Source:
             raise ValueError(f"{up.name} 还没有上传完")
         return _renamed(Source(up.name, up.path, kind_of(up.name), up), spec)
     if isinstance(spec, dict) and isinstance(spec.get("path"), str):
-        path = os.path.abspath(spec["path"])
+        path = paths.require_import_path(spec["path"])
         if not os.path.isfile(path):
             raise ValueError(f"文件不存在：{paths.norm(path)}")
         kind = kind_of(path)
