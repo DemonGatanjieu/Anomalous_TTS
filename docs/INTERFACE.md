@@ -4,7 +4,7 @@
 
 两个项目在不同的对话里开发。这份文档是双方唯一的约定：**Anomalous 只依赖这里写的东西**，其余都是 Anomalous_TTS 的内部实现，可以随时改。
 
-- 修改约定的一方负责同时更新两处：Anomalous_TTS 仓库的 `docs/INTERFACE.md`，以及 Claude 项目里的 `claude/anomalous-tts-interface.md`（两处内容相同）。
+- 约定只在这里维护：修改约定的一方负责更新 Anomalous_TTS 仓库的 `docs/INTERFACE.md`。
 - 只增加字段不算破坏；删除或改名字段、改变含义要把版本号加 1，并在文末“变更记录”写清楚。
 - Anomalous 读取时要容忍不认识的字段；写回角色设置时要原样保留不认识的字段。
 

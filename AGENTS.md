@@ -18,7 +18,7 @@
 | 改了…… | 更新 |
 | --- | --- |
 | 新增 / 删除 / 改名 / 拆分源码文件，模块职责、数据流 | ARCHITECTURE.md 的“模块职责”或“整体结构”，改最小的相关部分 |
-| 节点输入、HTTP 接口、角色文件夹规则、设置文件、剧本语法 | docs/INTERFACE.md。删字段、改名、改含义要升版本号，并提醒用户同步 Claude 项目里的 `claude/anomalous-tts-interface.md` |
+| 节点输入、HTTP 接口、角色文件夹规则、设置文件、剧本语法 | docs/INTERFACE.md。删字段、改名、改含义要升版本号 |
 | `vendor/` 的上游代码 | 只通过 `tools/sync_upstream.py` 打补丁，并在 UPSTREAM.md 记下提交号 |
 | 测试的新增或用途 | tests/README.md 的表 |
 | 用户能感觉到的变化 | CHANGELOG.md 的“未发布”；用法变了同步 README.md |

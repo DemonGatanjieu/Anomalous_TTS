@@ -55,7 +55,7 @@ ComfyUI Python
 
 ## 不能破的规矩
 
-1. **Anomalous 只依赖 INTERFACE.md。** 节点类名、`character` / `text` 输入、HTTP 接口、设置文件格式都在那里。只加字段不算破坏；删字段、改名、改含义要升版本号并写变更记录，同时更新 Claude 项目里的 `claude/anomalous-tts-interface.md`。
+1. **Anomalous 只依赖 INTERFACE.md。** 节点类名、`character` / `text` 输入、HTTP 接口、设置文件格式都在那里。只加字段不算破坏；删字段、改名、改含义要升版本号并写变更记录。
 2. **`vendor/` 不手改。** 改动写成 `tools/sync_upstream.py` 里的补丁，每个补丁必须恰好匹配一次；换上游版本后在 UPSTREAM.md 记下提交号。
 3. **结果可复现。** 每句的随机数只由种子和这句话本身决定，与批量分组、其他句子无关。改动 planner 或 engine 时用 `test_engine.py` 确认。
 4. **文字处理和官方一致。** 改前端后先和官方 GPT-SoVITS 对拍，再用 `tools/make_frontend_fixtures.py` 更新基准，不能为了让测试通过而改基准。
