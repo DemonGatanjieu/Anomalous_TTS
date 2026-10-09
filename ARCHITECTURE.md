@@ -59,7 +59,7 @@ ComfyUI Python
 2. **`vendor/` 不手改。** 改动写成 `tools/sync_upstream.py` 里的补丁，每个补丁必须恰好匹配一次；换上游版本后在 UPSTREAM.md 记下提交号。
 3. **结果可复现。** 每句的随机数只由种子和这句话本身决定，与批量分组、其他句子无关。改动 planner 或 engine 时用 `test_engine.py` 确认。
 4. **文字处理和官方一致。** 改前端后先和官方 GPT-SoVITS 对拍，再用 `tools/make_frontend_fixtures.py` 更新基准，不能为了让测试通过而改基准。
-5. **不执行模型里的代码。** 权重一律 `weights_only=True` 加载。
+5. **不执行下载来的任何东西。** 权重一律 `weights_only=True` 加载；配置文件只当数据解析（不 `exec` / `eval`），词典从文本建，不读写 pickle（`tests/test_safety.py` 把关）；下载锁定版本，先核对 SHA-256 再解压。这几条和第 11、12 条是 ComfyUI-Manager 收录审核逐条要求过的。
 6. **不阻塞事件循环。** HTTP 路由里的扫描、读写文件都放到工作线程。
 7. **一个坏角色不影响其他角色。** 读取失败的角色只返回 `name` 和 `error`。
 8. **可选依赖缺失时降级并说明。** 比如没有 g2pW 就用 pypinyin，控制台给一条短提示；不静默吞掉。
