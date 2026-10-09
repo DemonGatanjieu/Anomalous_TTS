@@ -57,6 +57,15 @@ def test_no_route_takes_a_folder_or_a_file_on_this_computer(fresh):  # noqa: F81
         importer.inspect([{"path": str(clip)}])  # a file is imported only by uploading it
 
 
+def test_a_fresh_install_can_import_at_once(fresh, monkeypatch):  # noqa: F811
+    models = fresh / "models"
+    monkeypatch.setattr(folder_paths, "models_dir", str(models))
+    paths.register()  # ComfyUI starting with no models/gpt_sovits yet
+    home = next(lib for lib in paths.libraries() if lib["storage"])
+    assert home["path"] == paths.norm(str(models / paths.CATEGORY))
+    assert home["exists"] is True and home["writable"] is True
+
+
 def test_unusable_entries_in_the_settings_file_are_ignored(fresh):  # noqa: F811
     configure()
     with open(app_config.path(), "w", encoding="utf-8") as f:

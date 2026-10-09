@@ -91,6 +91,10 @@ def _default_library() -> str:
 
 def register() -> None:
     folder_paths.add_model_folder_path(CATEGORY, _default_library(), is_default=True)
+    try:  # a fresh install has no models/gpt_sovits yet; without it the first import is refused
+        os.makedirs(_default_library(), exist_ok=True)
+    except OSError as e:
+        log.warning("[Anomalous_TTS] 建不了 %s：%s", _default_library(), e)
     config = app_config.load()
     for folder in ([config["storage"]] if config["storage"] else []) + config["libraries"]:
         if os.path.isdir(folder):
