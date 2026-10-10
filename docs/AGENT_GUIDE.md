@@ -37,7 +37,7 @@ GET /anomalous_tts/characters?name=<角色名>&refresh=1
 - `settings`：设置文件原文（没有设置文件时是 `{}`）；`settings_error` 不为空说明文件本身有问题。
 - `reference`、`emotions`：实际生效的参考音频和台词，`source` 说明来自哪里（`settings` 设置文件、`filename` 文件名、`auto` 自动挑选）。
 - `audio`：角色文件夹里所有音频的相对路径，换参考时从这里挑。
-- 某条音频的台词：用 `GET /anomalous_tts/audio?character=<角色名>&path=<相对路径>` 可以取到音频本身；台词在角色的 `.list` / 同名 `.txt` / `.lab` 里，自动挑选时节点已经帮你找好了（看 `reference.text`）。
+- 某条音频的台词：`GET /anomalous_tts/reference_text?character=<角色名>&path=<相对路径>` 返回节点会用的台词和语言（从同名 `.txt` / `.lab` 或 `.list` 里找）；音频本身用 `GET /anomalous_tts/audio`，参数相同。
 
 ## 2. 试音
 
