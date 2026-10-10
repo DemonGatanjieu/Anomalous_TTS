@@ -256,13 +256,17 @@ def test_lab_sidecar_is_used_when_generating(lib):
     assert characters.text_from_filename("ref/b.wav") == ""  # never guessed outside the import form
 
 
-def test_reference_text_route_gives_a_clip_line_and_only_for_the_characters_clips(lib):
+def test_reference_lines_read_only_the_characters_text_files_and_skip_bad_ones(lib):
     folder = make_char(lib, "普拉娜")
     (folder / "ref" / "a.lab").write_text("ラボ", encoding="utf-8")
-    assert server._reference_text_payload("普拉娜", "ref/a.wav") == {"text": "ラボ", "language": "ja"}
-    for name, rel in (("普拉娜", "all.list"), ("普拉娜", "../普拉娜/ref/a.wav"), ("没有这个人", "ref/a.wav")):
-        with pytest.raises(web.HTTPNotFound):
-            server._reference_text_payload(name, rel)
+    (folder / "ref" / "b.txt").write_bytes(bytes([0xFF, 0xFE, 0x00]) + b"broken")  # not UTF-8
+    (folder / "ref" / "short.lab").write_text("长" * (server.LINE_LIMIT + 1), encoding="utf-8")
+    lines = server._reference_lines_payload("普拉娜")["lines"]
+    assert lines["ref/a.wav"] == "ラボ"
+    assert "ref/b.wav" not in lines and "ref/short.wav" not in lines
+    assert set(lines) <= set(characters.scan()["普拉娜"].audio)
+    with pytest.raises(web.HTTPNotFound):
+        server._reference_lines_payload("没有这个人")
 
 
 def test_text_from_filename_rules():

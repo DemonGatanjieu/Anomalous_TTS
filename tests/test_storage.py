@@ -46,7 +46,7 @@ def test_no_route_takes_a_folder_or_a_file_on_this_computer(fresh):  # noqa: F81
     routes = web.RouteTableDef()
     server.register(type("PromptServer", (), {"routes": routes})())
     assert {(r.method, r.path) for r in routes} == {
-        ("GET", "/anomalous_tts/characters"), ("GET", "/anomalous_tts/audio"), ("GET", "/anomalous_tts/reference_text"),
+        ("GET", "/anomalous_tts/characters"), ("GET", "/anomalous_tts/audio"), ("GET", "/anomalous_tts/reference_lines"),
         ("GET", "/anomalous_tts/status"),
         ("POST", "/anomalous_tts/settings"), ("POST", "/anomalous_tts/pretrained/download"),
         ("POST", "/anomalous_tts/import/upload"), ("POST", "/anomalous_tts/import/inspect"),

@@ -146,9 +146,9 @@ Anomalous 推送剧本时只需要设置两个输入：
 
 返回角色文件夹里的一个音频文件（用于试听）。只允许 `audio` 列表里的文件。
 
-#### `GET /anomalous_tts/reference_text?character=<name>&path=<相对路径>`
+#### `GET /anomalous_tts/reference_lines?character=<name>`
 
-这条音频当参考时节点会用的台词：`{"text": "…", "language": "ja"}`。台词按第 3 节的顺序找（同名 `.txt` / `.lab` → 标注文件），找不到时 `text` 为空字符串；`language` 是标注里的语言，没有就按台词判断，再没有就是角色的语言。只读，只允许 `audio` 列表里的文件，别的返回 404。Anomalous 在“编辑情绪”里换参考音频时用它填台词。
+这个角色每条音频当参考时节点会用的台词：`{"lines": {"参考音频/a.wav": "…", …}}`。台词按第 3 节的顺序找（同名 `.txt` / `.lab` → 标注文件）。找不到台词、文本文件读不了、或者超过 500 字（那不是一句参考台词）的音频不在里面。不收路径：只读扫描时登记在这个角色名下的文本文件；只读，不写任何东西。角色不存在返回 404。Anomalous 在“编辑情绪”里用它搜索台词和换音频时填台词。
 
 #### 🔒 `POST /anomalous_tts/settings`
 
@@ -323,7 +323,7 @@ window.anomalous_open_voice(character)  // → true：已打开浏览器的“�
 - 7（2026-09-26）：`import/inspect` 的 `problems` 不再包含“还缺 GPT / SoVITS 权重”（界面的待办清单自己显示）；`format` 改为 7。
 - 8（2026-09-26）：`import/inspect` 的 `problems` 不再逐条提醒不在 3~10 秒的音频（界面按 `seconds` 自己处理）；`browse?recursive=1` 不进入 GPT-SoVITS 程序和训练用的文件夹；`format` 改为 8。
 - 11（2026-09-29）：剧本语法加 `[take:N]`（只重做一段）；设置文件加 `defaults`（Anomalous 直接生成时用的语言、语速）；`pretrained/download` 必须写 `ids`，空请求体不再下载全部；文件名、角色名不能含不可见字符和改变文字方向的字符（如 U+202E）；`format` 改为 11。
-- 14（2026-10-10）：加 `GET /anomalous_tts/reference_text`（一条音频的参考台词和语言，只读）；`format` 改为 14。
+- 14（2026-10-10）：加 `GET /anomalous_tts/reference_lines`（一个角色每条音频的参考台词，只读，不收路径）；`format` 改为 14。
 - 13（2026-10-08）：没有接口再接受本机路径。存放位置、其他角色文件夹、底模来源只由用户编辑 `ComfyUI/user/anomalous_tts.json` 设置，节点只读：去掉 `POST /anomalous_tts/storage`（以及移动角色）、`POST /anomalous_tts/libraries`、`POST /anomalous_tts/pretrained/source`；`status` 去掉 `move`，加 `settings_file`；`libraries[].source: app` 改为指设置文件里的 `libraries`。去掉 `GET /anomalous_tts/browse`（含 `recursive=1`）和 `GET /anomalous_tts/import/preview`；导入的文件只能上传，`{"path": …}` 返回 400。`format` 改为 13。
 - 12（2026-10-08）：节点的下拉选项改为英文：`language` 是 `auto` / `Japanese` / `Chinese` / `English`，`gpt_weights`、`sovits_weights` 的自动是 `auto`，`cross_lingual` 是 `adjust` / `off`，`volume` 是 `normalize` / `off`；以前的中文选项名照样接受。显示名改为 `Character Speech (GPT-SoVITS)`，中文界面的名字和提示来自 `locales/zh/`。`format` 改为 12。
 - 10（2026-09-29）：节点除 `character`、`text` 外的输入都改为可选；`language` 接受别名；加 `volume` 输入（默认统一音量）；`info` 也作为界面输出 `text` 进 `/history`。设置文件加 `replace`（读音替换）。自动挑主参考（以及 `import/inspect` 的 `suggested.reference`）改为优先陈述句和 4~8 秒，避开问句；`format` 改为 10。
