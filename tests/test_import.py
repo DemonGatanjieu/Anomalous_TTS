@@ -4,6 +4,9 @@ import os
 
 import pytest
 
+from aiohttp import web
+
+from Anomalous_TTS import server
 from Anomalous_TTS.core import characters, importer, settings
 
 from test_planner import make_char, wav
@@ -251,6 +254,15 @@ def test_lab_sidecar_is_used_when_generating(lib):
     c = characters.scan(max_age=0)["普拉娜"]
     assert c.reference_text("ref/a.wav") == ("ラボ", None)
     assert characters.text_from_filename("ref/b.wav") == ""  # never guessed outside the import form
+
+
+def test_reference_text_route_gives_a_clip_line_and_only_for_the_characters_clips(lib):
+    folder = make_char(lib, "普拉娜")
+    (folder / "ref" / "a.lab").write_text("ラボ", encoding="utf-8")
+    assert server._reference_text_payload("普拉娜", "ref/a.wav") == {"text": "ラボ", "language": "ja"}
+    for name, rel in (("普拉娜", "all.list"), ("普拉娜", "../普拉娜/ref/a.wav"), ("没有这个人", "ref/a.wav")):
+        with pytest.raises(web.HTTPNotFound):
+            server._reference_text_payload(name, rel)
 
 
 def test_text_from_filename_rules():

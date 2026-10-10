@@ -13,7 +13,7 @@ from .core import app_config, characters, dependencies, downloads, importer, pat
 
 log = logging.getLogger("Anomalous_TTS")
 
-API_FORMAT = 13
+API_FORMAT = 14
 LOCAL_ADDRESSES = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 
 
@@ -32,6 +32,15 @@ def _characters_payload(name: Optional[str], refresh: bool) -> Dict[str, Any]:
             raise web.HTTPNotFound(text=f"找不到角色：{name}")
         return {"format": API_FORMAT, "character": _summary(chars[name], detail=True)}
     return {"format": API_FORMAT, "characters": [_summary(c, detail=False) for c in chars.values()]}
+
+
+def _reference_text_payload(name: str, rel: str) -> Dict[str, Any]:
+    """The line and language the node would use with this clip as a reference."""
+    c = characters.scan().get(name)
+    if c is None or rel not in c.audio:
+        raise web.HTTPNotFound(text="找不到这个音频")
+    ref = c.make_reference(rel, characters.AUTO)
+    return {"text": ref.text, "language": ref.language}
 
 
 def _save_settings(body: Dict[str, Any]) -> Dict[str, Any]:
@@ -133,6 +142,11 @@ def register(prompt_server) -> None:
         if c is None or rel not in c.audio:
             raise web.HTTPNotFound(text="找不到这个音频")
         return web.FileResponse(c.abspath(rel))
+
+    @routes.get("/anomalous_tts/reference_text")
+    async def get_reference_text(request):
+        query = request.query
+        return web.json_response(await _in_thread(_reference_text_payload, query.get("character", ""), query.get("path", "")))
 
     @routes.post("/anomalous_tts/settings")
     async def post_settings(request):
