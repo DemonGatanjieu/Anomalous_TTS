@@ -34,13 +34,25 @@ def _characters_payload(name: Optional[str], refresh: bool) -> Dict[str, Any]:
     return {"format": API_FORMAT, "characters": [_summary(c, detail=False) for c in chars.values()]}
 
 
-def _reference_text_payload(name: str, rel: str) -> Dict[str, Any]:
-    """The line and language the node would use with this clip as a reference."""
+LINE_LIMIT = 500  # a 3~10 s clip's line is far shorter; a longer text file is not a line
+
+
+def _reference_lines_payload(name: str) -> Dict[str, Any]:
+    """Each clip's reference line as the node finds it. Takes no path: only the text files the
+    scan listed for this character are read. Clips without a line, with an unreadable text file
+    or a text longer than LINE_LIMIT are left out."""
     c = characters.scan().get(name)
-    if c is None or rel not in c.audio:
-        raise web.HTTPNotFound(text="找不到这个音频")
-    ref = c.make_reference(rel, characters.AUTO)
-    return {"text": ref.text, "language": ref.language}
+    if c is None:
+        raise web.HTTPNotFound(text=f"找不到角色：{name}")
+    lines = {}
+    for rel in c.audio:
+        try:
+            text, _ = c.reference_text(rel)
+        except (OSError, UnicodeDecodeError):
+            continue
+        if text and len(text) <= LINE_LIMIT:
+            lines[rel] = text
+    return {"lines": lines}
 
 
 def _save_settings(body: Dict[str, Any]) -> Dict[str, Any]:
@@ -143,10 +155,9 @@ def register(prompt_server) -> None:
             raise web.HTTPNotFound(text="找不到这个音频")
         return web.FileResponse(c.abspath(rel))
 
-    @routes.get("/anomalous_tts/reference_text")
-    async def get_reference_text(request):
-        query = request.query
-        return web.json_response(await _in_thread(_reference_text_payload, query.get("character", ""), query.get("path", "")))
+    @routes.get("/anomalous_tts/reference_lines")
+    async def get_reference_lines(request):
+        return web.json_response(await _in_thread(_reference_lines_payload, request.query.get("character", "")))
 
     @routes.post("/anomalous_tts/settings")
     async def post_settings(request):
