@@ -6,6 +6,8 @@
 
 > **English**: A ComfyUI node that speaks scripts with your trained GPT-SoVITS character models (v1, v2, v2Pro, v2ProPlus; Japanese, Chinese, English), with emotion tags, multiple speakers and pauses. No separate GPT-SoVITS install is needed. It is the companion of [Anomalous Model Browser](https://github.com/DemonGatanjieu/Anomalous_Model_Browser), which imports characters, edits emotions and pronunciations, and generates scripts from its Script Director. The node's buttons follow ComfyUI's language; the rest of this page is in Chinese.
 
+📺 **视频演示**：[在 B 站看配音演示](https://www.bilibili.com/video/BV1bkpZ6uEZQ/)（Video demo on Bilibili, in Chinese）
+
 ## 安装
 
 - **ComfyUI Manager**：搜索 `Anomalous TTS`，安装后重启 ComfyUI。
