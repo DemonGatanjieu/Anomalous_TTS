@@ -111,10 +111,10 @@ _hook_free_memory()
 TUNING_NAMES = {"stable": "稳定", "standard": "标准", "lively": "有起伏", "character": "角色特调", "node": "节点上改的值"}
 
 
-def tuning_summary(lines) -> str:
+def tuning_summary(lines, tuner: tuning.Tuner) -> str:
     """Which settings the lines were sampled with, e.g. "生成设置：标准 3 句，角色特调 1 句"."""
     counts = Counter(line.tuning.source for line in lines)
-    return "生成设置：" + "，".join(f"{TUNING_NAMES.get(name, name)} {n} 句" for name, n in counts.items())
+    return "生成设置：" + "，".join(f"{TUNING_NAMES.get(name) or tuner.label(name)} {n} 句" for name, n in counts.items())
 
 
 def _adv(options: dict) -> dict:
@@ -284,7 +284,7 @@ class AnomalousTTS_CharacterSpeech:
             progress=progress,
         )
         log.info("[Anomalous_TTS] %s", report.summary())
-        info = "\n".join([report.summary(), tuning_summary(plan.lines)] + plan.warnings)
+        info = "\n".join([report.summary(), tuning_summary(plan.lines, tuner)] + plan.warnings)
         audio = {"waveform": torch.from_numpy(wav).reshape(1, 1, -1), "sample_rate": sr}
         return {"ui": {"text": [info]}, "result": (audio, info)}
 

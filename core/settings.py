@@ -7,14 +7,21 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from typing import Any, Dict, Iterable, List
 
 FILENAME = "anomalous_tts.json"
 FORMAT = 1
 LANGS = {"ja", "zh", "en"}
-# Preset names; their numbers are in core/tuning.py.
+# Built-in preset names; their numbers are in core/tuning.py. Presets made in Anomalous are
+# named custom_<id> and live in the presets file; a character naming one deleted since falls back.
 PRESETS = ("stable", "standard", "lively")
+CUSTOM_PRESET = re.compile(r"custom_[a-z0-9]{1,12}")
+
+
+def is_preset_name(name: Any) -> bool:
+    return name in PRESETS or (isinstance(name, str) and CUSTOM_PRESET.fullmatch(name) is not None)
 # `defaults` numbers: the node's own input ranges (nodes.py), so a saved value is always usable.
 DEFAULT_RANGES = {
     "speed": (0.5, 2.0),
@@ -60,8 +67,8 @@ def check_block(where: str, block: Any, errors: List[str]) -> None:
     if not isinstance(block, dict):
         errors.append(f"{where} 必须是对象")
         return
-    if "preset" in block and block["preset"] not in PRESETS:
-        errors.append(f"{where}.preset 只能是 {' / '.join(PRESETS)}")
+    if "preset" in block and not is_preset_name(block["preset"]):
+        errors.append(f"{where}.preset 只能是 {' / '.join(PRESETS)} 或 custom_ 开头的自建预设")
     for key, (low, high) in DEFAULT_RANGES.items():
         if key not in block:
             continue

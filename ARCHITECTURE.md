@@ -46,7 +46,7 @@ ComfyUI Python
 - `core/importer.py`：导入角色：分块上传的暂存（只收上传的文件，不按路径读本机文件）、按扩展名判断文件种类（`kind_of`）、检查（版本、时长、台词）、创建或追加。台词查找复用 `characters.find_text`，设置校验复用 `settings.validate`，不另写一套规则。往已有角色里加时，同样的文件跳过、标注文件追加新行（失败时截回原长度），只有同名不同内容才拒绝。
 - `core/characters.py`：角色发现、默认权重、参考音频和情绪的解析、读音替换（`respell`），是 INTERFACE.md 第 2、3 节规则的**唯一实现**。自动挑主参考的顺序（`reference_rank`）导入时也用它。扫描结果缓存 30 秒，`invalidate()` 清空。
 - `core/settings.py`：`anomalous_tts.json` 的读、校验、原子写入；不认识的字段原样保留。
-- `core/tuning.py`：每一句用什么采样参数和语速：三档预设（`stable` / `standard` / `lively`）、按语言组合的规则、角色自己的 `defaults`（含 `by_language`）、节点上改过的值，按这个顺序叠加；还有预设文件 `ComfyUI/user/anomalous_tts_presets.json`（Anomalous 写，只有名字和数字，没有路径）。`planner` 给每个 `Line` 算好 `tuning`，引擎只照着用。
+- `core/tuning.py`：每一句用什么采样参数和语速：三档预设（`stable` / `standard` / `lively`）和预设文件里自建的档（`custom_…`）、按语言组合的规则、角色自己的 `defaults`（含 `by_language`）、节点上改过的值，按这个顺序叠加；还有预设文件 `ComfyUI/user/anomalous_tts_presets.json`（Anomalous 写，只有名字和数字，没有路径）。`planner` 给每个 `Line` 算好 `tuning`，引擎只照着用。
 - `core/script.py`、`core/langdetect.py`：剧本语法、按句判断语言。
 - `core/planner.py`：把剧本变成 `Plan`。每个 `Line` 带齐引擎需要的全部信息，引擎不再回头看角色或设置。
 - `core/engine.py`：推理流程和每句缓存。`core/t2s_batch.py` 是批量 GPT 解码（每句独立随机数），`core/models.py` 是模型和声码器的加载和 LRU，`core/checkpoints.py` 安全加载权重（`weights_only=True`）、识别版本（v1~v5）、把 v3 / v4 / v5 的 LoRA 合并进官方底模，`core/text_frontend.py` 是文字 → 音素和 BERT 特征，`core/audio.py` 是读取、重采样、静音和每句的音量统一（拼接时做，缓存里存的是模型原样的声音）。

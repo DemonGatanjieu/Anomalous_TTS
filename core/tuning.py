@@ -2,7 +2,8 @@
 
 From lowest to highest priority:
 
-1. the default preset (``ComfyUI/user/anomalous_tts_presets.json``, else "standard");
+1. the default preset (``ComfyUI/user/anomalous_tts_presets.json``, else "standard"; besides
+   the three built-in ones the file can hold presets made in Anomalous, ``custom_<id>``);
 2. the character's own ``defaults`` (a preset and / or numbers, and its speed);
 3. a line in another language than its reference: the rule for that pair of languages
    ("ja>zh"), else the one for every other pair ("cross", "stable" unless set);
@@ -42,6 +43,8 @@ PRESETS: Dict[str, Dict[str, float]] = {
 DEFAULT = "standard"
 CROSS = "cross"  # every pair of different languages without a rule of its own
 CROSS_DEFAULT = "stable"
+MAX_CUSTOM = 20
+LABEL_LENGTH = 24
 
 
 @dataclass(frozen=True)
@@ -68,19 +71,32 @@ def validate(data: Any) -> List[str]:
         return ["预设必须是一个 JSON 对象"]
     if data.get("format", FORMAT) != FORMAT:
         errors.append(f"format 必须是 {FORMAT}")
-    if "default" in data and data["default"] not in PRESETS:
-        errors.append(f"default 只能是 {' / '.join(PRESETS)}")
     presets = data.get("presets", {})
     if not isinstance(presets, dict):
         errors.append("presets 必须是对象")
-    else:
-        for name, block in presets.items():
-            if name not in PRESETS:
-                errors.append(f"没有这个预设：{name}")
-            elif isinstance(block, dict) and set(block) - set(SAMPLING):
+        presets = {}
+    custom = [name for name in presets if name not in PRESETS]
+    if len(custom) > MAX_CUSTOM:
+        errors.append(f"自建预设最多 {MAX_CUSTOM} 个")
+    for name, block in presets.items():
+        if name not in PRESETS and not settings.CUSTOM_PRESET.fullmatch(str(name)):
+            errors.append(f"没有这个预设：{name}")
+        elif not isinstance(block, dict):
+            errors.append(f"presets.{name} 必须是对象")
+        elif name in PRESETS:
+            if set(block) - set(SAMPLING):
                 errors.append(f"presets.{name} 只能写 {' / '.join(SAMPLING)}")
-            else:
-                settings.check_block(f"presets.{name}", block, errors)
+            settings.check_block(f"presets.{name}", block, errors)
+        else:
+            label = block.get("label")
+            if not isinstance(label, str) or not label.strip() or len(label) > LABEL_LENGTH or not label.isprintable():
+                errors.append(f"presets.{name}.label 必须是 1~{LABEL_LENGTH} 个字的名字")
+            if set(block) != {"label", *SAMPLING}:
+                errors.append(f"presets.{name} 要写 label 和 {' / '.join(SAMPLING)}，不能多也不能少")
+            settings.check_block(f"presets.{name}", {k: v for k, v in block.items() if k != "label"}, errors)
+    known = {*PRESETS, *custom}
+    if "default" in data and data["default"] not in known:
+        errors.append(f"default 不是已有的预设：{data['default']}")
     languages = data.get("languages", {})
     if not isinstance(languages, dict):
         errors.append("languages 必须是对象")
@@ -89,8 +105,8 @@ def validate(data: Any) -> List[str]:
             ref, _, lang = str(pair).partition(">")
             if pair != CROSS and not (ref in settings.LANGS and lang in settings.LANGS and ref != lang):
                 errors.append(f"languages 的键是 参考语言>生成语言（如 ja>zh）或 {CROSS}：{pair}")
-            if name not in PRESETS:
-                errors.append(f"languages.{pair} 只能是 {' / '.join(PRESETS)}")
+            if name not in known:
+                errors.append(f"languages.{pair} 不是已有的预设：{name}")
     return errors
 
 
@@ -129,11 +145,12 @@ def save(data: Dict[str, Any]) -> None:
 
 
 def view(data: Mapping[str, Any]) -> Dict[str, Any]:
-    """The presets file as the API shows it: every preset with its numbers in effect."""
+    """The presets file as the API shows it: every preset with its numbers in effect, built-in ones first."""
     tuner = Tuner(data)
     return {
         "default": tuner.default,
-        "presets": {name: tuner.preset(name) for name in PRESETS},
+        "presets": {name: tuner.preset(name) for name in tuner.names},
+        "labels": {name: tuner.label(name) for name in tuner.names if name not in PRESETS},
         "builtin": PRESETS,
         "languages": {k: v for k, v in tuner.languages.items() if k != CROSS},
         "cross": tuner.languages.get(CROSS, CROSS_DEFAULT),
@@ -148,20 +165,30 @@ class Tuner:
     def __init__(self, config: Mapping[str, Any], node: Optional[Mapping[str, float]] = None, cross_lingual: bool = True):
         self.default = config.get("default", DEFAULT)
         self.overrides = config.get("presets", {})
+        self.names = [*PRESETS, *(name for name in self.overrides if name not in PRESETS)]
         self.languages = config.get("languages", {})
         self.node = dict(node or {})
         self.cross_lingual = cross_lingual
 
     def preset(self, name: str) -> Dict[str, float]:
+        if name not in PRESETS:
+            return {k: self.overrides[name][k] for k in SAMPLING}
         return {**PRESETS[name], **self.overrides.get(name, {})}
 
+    def label(self, name: str) -> str:
+        """A preset made in Anomalous by the name it was given; any other source as it is."""
+        block = self.overrides.get(name) if name not in PRESETS else None
+        return block["label"] if isinstance(block, Mapping) else name
+
     def _apply(self, values: Dict[str, float], block: Mapping[str, Any]) -> bool:
-        """A preset name and / or numbers over ``values``; True if the block set anything."""
-        if block.get("preset") in PRESETS:
+        """A preset name and / or numbers over ``values``; True if the block set anything.
+        A preset deleted since is left out, so the line keeps the general setting."""
+        known = block.get("preset") in self.names
+        if known:
             values.update(self.preset(block["preset"]))
         numbers = {k: block[k] for k in (*SAMPLING, "speed") if k in block}
         values.update(numbers)
-        return block.get("preset") in PRESETS or bool(numbers)
+        return known or bool(numbers)
 
     def for_line(self, defaults: Any, ref_lang: Optional[str], lang: str) -> Tuning:
         values: Dict[str, float] = {**self.preset(self.default), "speed": 1.0}

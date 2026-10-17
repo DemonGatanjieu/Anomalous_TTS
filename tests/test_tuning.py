@@ -57,6 +57,32 @@ def test_presets_file_is_checked(tmp_path, monkeypatch):
     assert tuning.load() == {}  # a broken file: the built-in presets
 
 
+NARRATION = {"label": "念旁白", "top_k": 12, "top_p": 1.0, "temperature": 0.9, "repetition_penalty": 1.35}
+
+
+def test_presets_made_in_anomalous():
+    config = {"default": "custom_a1", "presets": {"custom_a1": NARRATION}, "languages": {"ja>zh": "custom_a1"}}
+    assert tuning.validate(config) == []
+    tuner = tuning.Tuner(config)
+    line = tuner.for_line({}, "ja", "ja")
+    assert (line.source, line.top_k, line.temperature, tuner.label(line.source)) == ("custom_a1", 12, 0.9, "念旁白")
+    assert tuner.for_line({}, "ja", "zh").source == "custom_a1"
+    view = tuning.view(config)
+    assert list(view["presets"]) == ["stable", "standard", "lively", "custom_a1"] and view["labels"] == {"custom_a1": "念旁白"}
+    # A character naming a preset deleted since keeps the general setting.
+    gone = tuning.Tuner({}).for_line({"by_language": {"zh": {"preset": "custom_a1"}}}, "ja", "zh")
+    assert gone.source == "stable"
+    assert settings.validate({"defaults": {"preset": "custom_a1"}}, [], [], []) == []
+    # Checked: a known name, a label, all four numbers, used names defined in the file.
+    assert tuning.validate({"presets": {"custom_a1": {**NARRATION, "label": ""}}})
+    assert tuning.validate({"presets": {"custom_a1": {k: v for k, v in NARRATION.items() if k != "top_p"}}})
+    assert tuning.validate({"presets": {"custom_a1": {**NARRATION, "speed": 1.1}}})
+    assert tuning.validate({"presets": {"Custom_A": NARRATION}}) and tuning.validate({"default": "custom_b2"})
+    assert tuning.validate({"languages": {"cross": "custom_b2"}})
+    many = {f"custom_{i}": NARRATION for i in range(tuning.MAX_CUSTOM + 1)}
+    assert tuning.validate({"presets": many})
+
+
 def test_presets_route_saves_only_valid_files(tmp_path, monkeypatch):
     monkeypatch.setattr(tuning, "path", lambda: str(tmp_path / tuning.FILENAME))
     with pytest.raises(server.web.HTTPBadRequest):
@@ -102,4 +128,4 @@ def test_node_values_count_only_when_changed(tmp_path, monkeypatch):
     assert (first.source, first.top_k, first.speed) == ("character", 20, 1.2)
     node.generate("阿罗娜", "おはよう。", temperature=0.5)
     assert (seen["lines"][0].tuning.source, seen["lines"][0].tuning.temperature) == ("node", 0.5)
-    assert nodes.tuning_summary(seen["lines"]) == "生成设置：节点上改的值 1 句"
+    assert nodes.tuning_summary(seen["lines"], tuning.Tuner({})) == "生成设置：节点上改的值 1 句"
