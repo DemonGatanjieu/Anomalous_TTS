@@ -13,6 +13,8 @@ from typing import Any, Dict, Iterable, List
 FILENAME = "anomalous_tts.json"
 FORMAT = 1
 LANGS = {"ja", "zh", "en"}
+# Preset names; their numbers are in core/tuning.py.
+PRESETS = ("stable", "standard", "lively")
 # `defaults` numbers: the node's own input ranges (nodes.py), so a saved value is always usable.
 DEFAULT_RANGES = {
     "speed": (0.5, 2.0),
@@ -53,6 +55,22 @@ def _check_ref(where: str, ref: Any, audio: Iterable[str], errors: List[str]) ->
         errors.append(f"{where}.language 只能是 ja / zh / en")
 
 
+def check_block(where: str, block: Any, errors: List[str]) -> None:
+    """A preset name and / or numbers: `defaults`, one of its `by_language`, a preset's numbers."""
+    if not isinstance(block, dict):
+        errors.append(f"{where} 必须是对象")
+        return
+    if "preset" in block and block["preset"] not in PRESETS:
+        errors.append(f"{where}.preset 只能是 {' / '.join(PRESETS)}")
+    for key, (low, high) in DEFAULT_RANGES.items():
+        if key not in block:
+            continue
+        value = block[key]
+        number = int if key == "top_k" else (int, float)
+        if isinstance(value, bool) or not isinstance(value, number) or not low <= value <= high:
+            errors.append(f"{where}.{key} 必须是 {low}~{high} 的{'整数' if key == 'top_k' else '数'}")
+
+
 def validate(data: Any, gpt: Iterable[str], sovits: Iterable[str], audio: Iterable[str]) -> List[str]:
     """Return a list of problems (empty = valid). Unknown keys are allowed."""
     errors: List[str] = []
@@ -78,13 +96,15 @@ def validate(data: Any, gpt: Iterable[str], sovits: Iterable[str], audio: Iterab
     else:
         if "language" in defaults and defaults["language"] not in LANGS | {"auto"}:
             errors.append("defaults.language 只能是 auto / ja / zh / en")
-        for key, (low, high) in DEFAULT_RANGES.items():
-            if key not in defaults:
-                continue
-            value = defaults[key]
-            number = int if key == "top_k" else (int, float)
-            if isinstance(value, bool) or not isinstance(value, number) or not low <= value <= high:
-                errors.append(f"defaults.{key} 必须是 {low}~{high} 的{'整数' if key == 'top_k' else '数'}")
+        check_block("defaults", defaults, errors)
+        by_language = defaults.get("by_language", {})
+        if not isinstance(by_language, dict):
+            errors.append("defaults.by_language 必须是对象")
+        else:
+            for lang, block in by_language.items():
+                if lang not in LANGS:
+                    errors.append(f"defaults.by_language 的键只能是 ja / zh / en：{lang}")
+                check_block(f"defaults.by_language.{lang}", block, errors)
     replace = data.get("replace", {})
     if not isinstance(replace, dict) or not all(
         isinstance(k, str) and k.strip() and isinstance(v, str) for k, v in replace.items()

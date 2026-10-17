@@ -9,11 +9,11 @@ from typing import Any, Callable, Dict, List, Optional
 
 from aiohttp import web
 
-from .core import app_config, characters, checkpoints, dependencies, downloads, importer, paths, settings
+from .core import app_config, characters, checkpoints, dependencies, downloads, importer, paths, settings, tuning
 
 log = logging.getLogger("Anomalous_TTS")
 
-API_FORMAT = 15
+API_FORMAT = 16
 LOCAL_ADDRESSES = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 
 
@@ -109,6 +109,19 @@ def _status_payload(local: bool) -> Dict[str, Any]:
     }
 
 
+def _presets_payload() -> Dict[str, Any]:
+    return {"format": API_FORMAT, "file": tuning.path().replace("\\", "/"), **tuning.view(tuning.load())}
+
+
+def _save_presets(body: Dict[str, Any]) -> Dict[str, Any]:
+    data = body.get("presets")
+    problems = tuning.validate(data)
+    if problems:
+        raise web.HTTPBadRequest(text="；".join(problems))
+    tuning.save(data)
+    return {"ok": True, **_presets_payload()}
+
+
 def _is_local(request: web.Request) -> bool:
     return request.remote in LOCAL_ADDRESSES
 
@@ -177,6 +190,15 @@ def register(prompt_server) -> None:
         body = await _json_body(request)
         result = await asyncio.get_running_loop().run_in_executor(None, _save_settings, body)
         return web.json_response(result)
+
+    @routes.get("/anomalous_tts/presets")
+    async def get_presets(request):
+        return web.json_response(await _in_thread(_presets_payload))
+
+    @routes.post("/anomalous_tts/presets")
+    async def post_presets(request):
+        _require_local(request)
+        return web.json_response(await _in_thread(_save_presets, await _json_body(request)))
 
     @routes.get("/anomalous_tts/status")
     async def get_status(request):

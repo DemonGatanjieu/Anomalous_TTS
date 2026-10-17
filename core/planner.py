@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Tuple, Union
 
 from . import langdetect, script
 from .characters import AUTO, MAIN, Character, Reference, resolve_name
+from .tuning import Tuner, Tuning
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,7 @@ class Line:
     text: str
     language: str
     seed: int
+    tuning: Tuning = Tuning()  # sampling and speed (core/tuning.py)
 
 
 @dataclass(frozen=True)
@@ -81,11 +83,12 @@ def split_sentences(text: str) -> List[str]:
 
 
 class _Builder:
-    def __init__(self, chars: Dict[str, Character], opts: NodeOptions):
+    def __init__(self, chars: Dict[str, Character], opts: NodeOptions, tuner: Tuner):
         if opts.character not in chars:
             raise ValueError(f"找不到角色：{opts.character}")
         self.chars = chars
         self.opts = opts
+        self.tuner = tuner
         self.plan = Plan()
         self.voices: Dict[Tuple[str, str], Voice] = {}
         self.counts: Counter = Counter()
@@ -184,7 +187,8 @@ class _Builder:
             occurrence = self.counts[key]
             self.counts[key] += 1
             seed = line_seed(self.opts.seed, self.speaker.name, self.emotion, sentence, occurrence, self.take)
-            self.plan.items.append(Line(voice, sentence, lang, seed))
+            tuning = self.tuner.for_line(self.speaker.settings.get("defaults"), voice.ref_lang, lang)
+            self.plan.items.append(Line(voice, sentence, lang, seed, tuning))
 
     def build(self, text: str) -> Plan:
         for token in script.tokenize(text):
@@ -208,5 +212,6 @@ class _Builder:
         return self.plan
 
 
-def build_plan(chars: Dict[str, Character], opts: NodeOptions, text: str) -> Plan:
-    return _Builder(chars, opts).build(text)
+def build_plan(chars: Dict[str, Character], opts: NodeOptions, text: str, tuner: Optional[Tuner] = None) -> Plan:
+    """``tuner``: the presets file and the node's changed inputs; None = built-in presets only."""
+    return _Builder(chars, opts, tuner or Tuner({})).build(text)

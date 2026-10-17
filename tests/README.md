@@ -38,6 +38,7 @@ assets/
 | `test_frontend.py` | 日 / 中 / 英音素与基准一致（基准已和官方 GPT-SoVITS 对过，见 UPSTREAM.md） |
 | `test_vram.py` | ComfyUI 显存不够时让出我们的模型，够时留着 |
 | `test_structure.py` | 每个源码文件在 ARCHITECTURE.md 里都有一行、每个模块都从 `__init__.py` 导入到；超过 600 行时警告 |
+| `test_tuning.py` | 生成预设：什么都不设时和以前一样（同语言 standard，跨语言 stable）、各层的先后、预设文件的校验和读写、角色的 `by_language`、节点上只有改过的值才算数 |
 | `test_versions.py` | SoVITS 版本识别（文件头 `00`~`08`）、每个版本要哪些底模、LoRA 合并（`W + B @ A`）、旋转位置编码和梅尔滤波器与 x-transformers / librosa 一致（装了才比） |
 | `test_engine.py` | 批量解码与官方逐句解码结果完全相同；批量分组不影响结果；缓存和可复现性 |
 

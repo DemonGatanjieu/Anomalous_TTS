@@ -15,7 +15,7 @@ import importlib.util
 import logging
 import os
 import threading
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -31,10 +31,6 @@ log = logging.getLogger("Anomalous_TTS")
 HZ = 50  # semantic tokens per second
 REF_MIN_SEC = 3.0
 REF_MAX_SEC = 10.0
-# Sampling caps for cross-lingual lines. Measured with a Japanese v2 voice on Chinese lines:
-# no take failed at the defaults either, but these gave the most consistent takes across seeds.
-CROSS_LINGUAL_TOP_K = 10
-CROSS_LINGUAL_TEMPERATURE = 0.8
 AUDIO_CACHE_BYTES = 64 * 1024 * 1024  # ~8 minutes of speech, enough to redo one line of a script
 # v3 / v4 / v5 (GPT-SoVITS ``get_tts_wav``): diffusion steps and CFG the official UI starts with, the
 # reference mel (rate, n_fft = window, hop), and the reference / total frames of one diffusion chunk.
@@ -47,26 +43,11 @@ SPEC_MIN, SPEC_MAX = -12, 2
 
 @dataclass
 class SynthesisParams:
-    top_k: int = 15
-    top_p: float = 1.0
-    temperature: float = 1.0
-    repetition_penalty: float = 1.35
-    speed: float = 1.0
+    """What applies to the whole script; each line's sampling and speed are in ``line.tuning``."""
+
     pause_sec: float = 0.3
     batch_size: int = 8
-    cross_lingual: bool = True  # a line in another language than its reference samples more tightly
     loudness_db: Optional[float] = -20.0  # each sentence's voiced RMS; None = leave the model's level
-
-    def sampling_key(self) -> Tuple:
-        return (int(self.top_k), float(self.top_p), float(self.temperature), float(self.repetition_penalty))
-
-    def for_line(self, line: Line) -> "SynthesisParams":
-        """The settings a line is sampled with: capped for a line whose language differs from its
-        reference (a Japanese voice speaking Chinese), so the borrowed voice keeps steadier tones."""
-        if not self.cross_lingual or line.language == line.voice.ref_lang:
-            return self
-        return replace(self, top_k=min(int(self.top_k), CROSS_LINGUAL_TOP_K),
-                       temperature=min(float(self.temperature), CROSS_LINGUAL_TEMPERATURE))
 
 
 @dataclass
@@ -323,18 +304,20 @@ class Engine:
         return self._refs.get_or_create(key, build)
 
     # ================= synthesis =================
-    def _line_keys(self, line: Line, params: SynthesisParams) -> Tuple[Tuple, Tuple]:
+    def _line_keys(self, line: Line) -> Tuple[Tuple, Tuple]:
         v = line.voice
         token_key = (
             file_key(v.gpt_path), file_key(v.sovits_path), file_key(v.ref_wav), v.ref_text, v.ref_lang,
-            line.text, line.language, line.seed, params.sampling_key(), str(self.dtype),
+            line.text, line.language, line.seed, line.tuning.sampling_key(), str(self.dtype),
         )
-        audio_key = token_key + (float(params.speed),)
+        audio_key = token_key + (float(line.tuning.speed),)
         return token_key, audio_key
 
     @torch.inference_mode()
     def _generate_tokens(self, voice: Voice, lines: List[Line], keys: List[Tuple], params: SynthesisParams,
                          out: Dict[Tuple, torch.Tensor], report: Report, tick: Callable[[], None]) -> None:
+        """``lines`` share one voice and one sampling (``lines[0].tuning``)."""
+        tuning = lines[0].tuning
         gpt = self.gpt(voice.gpt_path)
         sovits = self.sovits(voice.sovits_path)
         ref = self._reference(voice, sovits)
@@ -356,8 +339,8 @@ class Engine:
                 [it[2].to(self.device, self.dtype) for it in chunk],
                 ref.prompt,
                 [it[3].seed for it in chunk],
-                top_k=int(params.top_k), top_p=float(params.top_p), temperature=float(params.temperature),
-                repetition_penalty=float(params.repetition_penalty), early_stop_num=HZ * gpt.max_sec,
+                top_k=int(tuning.top_k), top_p=float(tuning.top_p), temperature=float(tuning.temperature),
+                repetition_penalty=float(tuning.repetition_penalty), early_stop_num=HZ * gpt.max_sec,
             )
             report.batches.append(len(chunk))
             for it, tokens in zip(chunk, results):
@@ -366,7 +349,7 @@ class Engine:
                 tick()
 
     @torch.inference_mode()
-    def _decode_audio(self, line: Line, tokens: torch.Tensor, params: SynthesisParams) -> np.ndarray:
+    def _decode_audio(self, line: Line, tokens: torch.Tensor) -> np.ndarray:
         voice = line.voice
         sovits = self.sovits(voice.sovits_path)
         ref = self._reference(voice, sovits)
@@ -377,13 +360,13 @@ class Engine:
         with torch.random.fork_rng(devices=devices):  # decode adds noise; keep it per-line and leave global RNG alone
             torch.manual_seed(line.seed)
             if sovits.makes_mel:
-                audio = self._decode_mel(sovits, ref, tokens, phones, float(params.speed))
+                audio = self._decode_mel(sovits, ref, tokens, phones, float(line.tuning.speed))
             else:
                 audio = sovits.model.decode(
                     tokens.to(self.device).view(1, 1, -1),
                     torch.LongTensor(phones).unsqueeze(0).to(self.device),
                     [ref.spec],
-                    speed=float(params.speed),
+                    speed=float(line.tuning.speed),
                     sv_emb=[ref.sv_emb] if sovits.is_v2pro else None,
                 )[0][0]
         audio = audio.float().cpu().numpy()
@@ -429,7 +412,7 @@ class Engine:
         with self._lock:
             lines = plan.lines
             report = Report(lines=len(lines))
-            keys = [self._line_keys(line, params.for_line(line)) for line in lines]
+            keys = [self._line_keys(line) for line in lines]
             audio: Dict[Tuple, Tuple[np.ndarray, int]] = {}
             tokens: Dict[Tuple, torch.Tensor] = {}
             for token_key, audio_key in keys:
@@ -451,18 +434,17 @@ class Engine:
             # One batch shares one voice and one set of sampling settings.
             groups: Dict[Tuple[Voice, Tuple], List[int]] = {}
             for i in need_tokens:
-                groups.setdefault((lines[i].voice, params.for_line(lines[i]).sampling_key()), []).append(i)
+                groups.setdefault((lines[i].voice, lines[i].tuning.sampling_key()), []).append(i)
             for (voice, _), idxs in groups.items():
                 log.info("[Anomalous_TTS] %s：生成 %d 句", voice.label, len(idxs))
                 self._generate_tokens(
-                    voice, [lines[i] for i in idxs], [keys[i][0] for i in idxs], params.for_line(lines[idxs[0]]),
-                    tokens, report, tick,
+                    voice, [lines[i] for i in idxs], [keys[i][0] for i in idxs], params, tokens, report, tick,
                 )
             for i in need_audio:
                 token_key, audio_key = keys[i]
                 if audio_key not in audio:  # the same line can appear twice with one key only if identical
                     sr = self.sovits(lines[i].voice.sovits_path).output_rate
-                    audio[audio_key] = (self._decode_audio(lines[i], tokens[token_key], params), sr)
+                    audio[audio_key] = (self._decode_audio(lines[i], tokens[token_key]), sr)
                     self._audio.put(audio_key, audio[audio_key])
                 tick()
             report.generated = len(need_audio)

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections import Counter
 from typing import Optional
 
 import torch
@@ -19,7 +20,7 @@ import torch
 import comfy.model_management as mm
 import comfy.utils
 
-from .core import characters, paths, planner
+from .core import characters, paths, planner, tuning
 from .core.engine import Engine, SynthesisParams
 
 log = logging.getLogger("Anomalous_TTS")
@@ -35,6 +36,9 @@ LANGUAGE_ALIASES = {
     "en": ["英语", "英文", "en", "english"],
 }
 CROSS_LINGUAL_CHOICES = {"adjust": True, "off": False}
+# Inputs that only count when changed from these defaults; otherwise the presets decide (core/tuning.py).
+TUNING_DEFAULTS = {"speed": 1.0, "top_k": 15, "top_p": 1.0, "temperature": 1.0, "repetition_penalty": 1.35}
+TUNING_HINT = "Left at its default, the presets decide (Anomalous: GPT-SoVITS Settings, and each character's generation settings)"
 VOLUME_CHOICES = {"normalize": -20.0, "off": None}
 # The options' names before they were English, still taken from saved workflows.
 OLD_AUTO = "自动"
@@ -104,6 +108,15 @@ def _hook_free_memory() -> None:
 _hook_free_memory()
 
 
+TUNING_NAMES = {"stable": "稳定", "standard": "标准", "lively": "有起伏", "character": "角色特调", "node": "节点上改的值"}
+
+
+def tuning_summary(lines) -> str:
+    """Which settings the lines were sampled with, e.g. "生成设置：标准 3 句，角色特调 1 句"."""
+    counts = Counter(line.tuning.source for line in lines)
+    return "生成设置：" + "，".join(f"{TUNING_NAMES.get(name, name)} {n} 句" for name, n in counts.items())
+
+
 def _adv(options: dict) -> dict:
     """Hide a widget under the node's "advanced" section (ComfyUI frontend ≥ 1.2x)."""
     return {**options, "advanced": True}
@@ -162,7 +175,7 @@ class AnomalousTTS_CharacterSpeech:
             # is unchanged from when these were required: ComfyUI saves widget values by position.
             "optional": {
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF}),
-                "speed": ("FLOAT", {"default": 1.0, "min": 0.5, "max": 2.0, "step": 0.05, "tooltip": "Speaking speed"}),
+                "speed": ("FLOAT", {"default": 1.0, "min": 0.5, "max": 2.0, "step": 0.05, "tooltip": f"Speaking speed. {TUNING_HINT}"}),
                 "language": (list(LANGUAGE_CHOICES), _adv({"default": AUTO, "tooltip": "auto: decided for each sentence from its text"})),
                 "reference_audio": (
                     "STRING",
@@ -180,15 +193,16 @@ class AnomalousTTS_CharacterSpeech:
                 "gpt_weights": ([AUTO] + characters.combo_values(chars, "gpt"), _adv({"tooltip": "auto: the one in the character's settings, else the most trained"})),
                 "sovits_weights": ([AUTO] + characters.combo_values(chars, "sovits"), _adv({"tooltip": "auto: the one in the character's settings, else the most trained"})),
                 "pause_seconds": ("FLOAT", _adv({"default": 0.3, "min": 0.0, "max": 5.0, "step": 0.05, "tooltip": "Pause between sentences"})),
-                "top_k": ("INT", _adv({"default": 15, "min": 1, "max": 100})),
-                "top_p": ("FLOAT", _adv({"default": 1.0, "min": 0.05, "max": 1.0, "step": 0.05})),
-                "temperature": ("FLOAT", _adv({"default": 1.0, "min": 0.05, "max": 2.0, "step": 0.05})),
-                "repetition_penalty": ("FLOAT", _adv({"default": 1.35, "min": 1.0, "max": 2.0, "step": 0.05})),
+                "top_k": ("INT", _adv({"default": 15, "min": 1, "max": 100, "tooltip": TUNING_HINT})),
+                "top_p": ("FLOAT", _adv({"default": 1.0, "min": 0.05, "max": 1.0, "step": 0.05, "tooltip": TUNING_HINT})),
+                "temperature": ("FLOAT", _adv({"default": 1.0, "min": 0.05, "max": 2.0, "step": 0.05, "tooltip": TUNING_HINT})),
+                "repetition_penalty": ("FLOAT", _adv({"default": 1.35, "min": 1.0, "max": 2.0, "step": 0.05, "tooltip": TUNING_HINT})),
                 "batch_size": ("INT", _adv({"default": 8, "min": 1, "max": 64, "tooltip": "Sentences generated at once. Lower it when VRAM runs out"})),
                 "cross_lingual": (list(CROSS_LINGUAL_CHOICES), _adv({
                     "default": "adjust",
                     "tooltip": "adjust: a sentence in another language than the reference clip (a Japanese character speaking "
-                               "Chinese, say) uses top_k at most 10 and temperature at most 0.8, which is steadier; lower values you set stay",
+                               "Chinese, say) uses the preset set for that pair of languages, \"stable\" unless changed in Anomalous. "
+                               "off: every sentence as if in the reference's language",
                 })),
                 "volume": (list(VOLUME_CHOICES), _adv({
                     "default": "normalize",
@@ -244,7 +258,12 @@ class AnomalousTTS_CharacterSpeech:
             sovits=_relative(sovits_weights, c, chars),
             seed=seed,
         )
-        plan = planner.build_plan(chars, opts, text)
+        given = {"speed": speed, "top_k": top_k, "top_p": top_p, "temperature": temperature, "repetition_penalty": repetition_penalty}
+        own = c.settings.get("defaults") if isinstance(c.settings.get("defaults"), dict) else {}
+        # Anomalous fills these inputs with the character's own `defaults`; only other values are the node's own.
+        changed = {k: v for k, v in given.items() if v != TUNING_DEFAULTS[k] and v != own.get(k)}
+        tuner = tuning.Tuner(tuning.load(), changed, CROSS_LINGUAL_CHOICES.get(current_choice("cross_lingual", cross_lingual), True))
+        plan = planner.build_plan(chars, opts, text, tuner)
         for message in plan.warnings:
             log.warning("[Anomalous_TTS] %s", message)
         if "ja" in {line.language for line in plan.lines} | {line.voice.ref_lang for line in plan.lines}:
@@ -259,15 +278,13 @@ class AnomalousTTS_CharacterSpeech:
         wav, sr, report = get_engine().synthesize(
             plan,
             SynthesisParams(
-                top_k=top_k, top_p=top_p, temperature=temperature, repetition_penalty=repetition_penalty,
-                speed=speed, pause_sec=pause_seconds, batch_size=batch_size,
-                cross_lingual=CROSS_LINGUAL_CHOICES.get(current_choice("cross_lingual", cross_lingual), True),
+                pause_sec=pause_seconds, batch_size=batch_size,
                 loudness_db=VOLUME_CHOICES.get(current_choice("volume", volume), VOLUME_CHOICES["normalize"]),
             ),
             progress=progress,
         )
         log.info("[Anomalous_TTS] %s", report.summary())
-        info = "\n".join([report.summary()] + plan.warnings)
+        info = "\n".join([report.summary(), tuning_summary(plan.lines)] + plan.warnings)
         audio = {"waveform": torch.from_numpy(wav).reshape(1, 1, -1), "sample_rate": sr}
         return {"ui": {"text": [info]}, "result": (audio, info)}
 
