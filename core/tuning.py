@@ -8,7 +8,8 @@ From lowest to highest priority:
 3. a line in another language than its reference: the rule for that pair of languages
    ("ja>zh"), else the one for every other pair ("cross", "stable" unless set);
 4. the character's ``defaults.by_language`` entry for the line's language;
-5. node inputs changed from the node's own defaults (and not just the character's
+5. the node's ``preset`` input: every line's sampling numbers from that preset (speed stays);
+6. node inputs changed from the node's own defaults (and not just the character's
    ``defaults`` sent back by Anomalous).
 
 The presets file is written by Anomalous (``POST /anomalous_tts/presets``, this computer
@@ -160,15 +161,18 @@ def view(data: Mapping[str, Any]) -> Dict[str, Any]:
 # ---------- one line's settings ----------
 class Tuner:
     """``config``: the presets file; ``node``: node inputs (SAMPLING and speed) changed from the node's
-    defaults; ``cross_lingual`` False leaves the language rules out."""
+    defaults; ``cross_lingual`` False leaves the language rules out; ``preset``: the node's choice of one
+    preset for every line ("" = the layers decide; a name the file does not know is left out)."""
 
-    def __init__(self, config: Mapping[str, Any], node: Optional[Mapping[str, float]] = None, cross_lingual: bool = True):
+    def __init__(self, config: Mapping[str, Any], node: Optional[Mapping[str, float]] = None, cross_lingual: bool = True,
+                 preset: str = ""):
         self.default = config.get("default", DEFAULT)
         self.overrides = config.get("presets", {})
         self.names = [*PRESETS, *(name for name in self.overrides if name not in PRESETS)]
         self.languages = config.get("languages", {})
         self.node = dict(node or {})
         self.cross_lingual = cross_lingual
+        self.chosen = preset if preset in self.names else ""
 
     def preset(self, name: str) -> Dict[str, float]:
         if name not in PRESETS:
@@ -202,6 +206,9 @@ class Tuner:
         own = (defaults.get("by_language") or {}).get(lang)
         if isinstance(own, Mapping) and self._apply(values, own):
             source = "character"
+        if self.chosen:
+            values.update(self.preset(self.chosen))
+            source = self.chosen
         if self.node:
             values.update(self.node)
             source = "node"

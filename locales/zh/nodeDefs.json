@@ -34,10 +34,13 @@
         "tooltip": "一次同时生成几句。显存不够就调小"
       },
       "cross_lingual": {
-        "tooltip": "adjust（自动调整）：句子和参考音频不是同一种语言时（比如日语角色说中文），这些句子的 top_k 最多 10、temperature 最多 0.8，更稳；你设得更低时按你的。off：不调整"
+        "tooltip": "adjust（自动调整）：句子和参考音频不是同一种语言时（比如日语角色说中文），用 Anomalous 里给这对语言设的预设，没改过就是“稳定”。off：每句都当作参考音频的语言"
       },
       "volume": {
         "tooltip": "normalize（统一音量）：每句的人声都调到约 -20 dBFS（峰值不超过 -1 dBFS），换种子、换句子音量不再忽大忽小。off：保持模型输出的音量"
+      },
+      "preset": {
+        "tooltip": "留空：按 Anomalous 的生成预设和角色的生成设置。填预设名（stable / standard / lively，或 Anomalous 里自建的 custom_…）：每句都用这一档的数字；语速不属于预设"
       }
     }
   }

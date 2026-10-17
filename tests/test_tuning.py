@@ -83,6 +83,18 @@ def test_presets_made_in_anomalous():
     assert tuning.validate({"presets": many})
 
 
+def test_one_preset_for_every_line():
+    config = {"presets": {"custom_a1": NARRATION}}
+    character = {"speed": 1.2, "by_language": {"zh": {"preset": "lively", "speed": 0.9}}}
+    tuner = tuning.Tuner(config, preset="custom_a1")
+    chinese = tuner.for_line(character, "ja", "zh")  # over the language rule and the character's own preset; speed stays
+    assert (chinese.source, chinese.top_k, chinese.speed) == ("custom_a1", 12, 0.9)
+    assert tuner.for_line({}, "ja", "ja").source == "custom_a1"
+    node = tuning.Tuner(config, {"top_k": 40}, preset="standard").for_line({}, "ja", "zh")  # numbers changed on the node still go first
+    assert (node.source, node.top_k, node.temperature) == ("node", 40, 1.0)
+    assert tuning.Tuner(config, preset="custom_gone").chosen == ""
+
+
 def test_presets_route_saves_only_valid_files(tmp_path, monkeypatch):
     monkeypatch.setattr(tuning, "path", lambda: str(tmp_path / tuning.FILENAME))
     with pytest.raises(server.web.HTTPBadRequest):
@@ -129,3 +141,7 @@ def test_node_values_count_only_when_changed(tmp_path, monkeypatch):
     node.generate("阿罗娜", "おはよう。", temperature=0.5)
     assert (seen["lines"][0].tuning.source, seen["lines"][0].tuning.temperature) == ("node", 0.5)
     assert nodes.tuning_summary(seen["lines"], tuning.Tuner({})) == "生成设置：节点上改的值 1 句"
+    node.generate("阿罗娜", "おはよう。", preset="stable")
+    assert (seen["lines"][0].tuning.source, seen["lines"][0].tuning.top_k, seen["lines"][0].tuning.speed) == ("stable", 10, 1.2)
+    out = node.generate("阿罗娜", "おはよう。", preset="custom_gone")
+    assert "没有叫 custom_gone 的预设" in out["result"][1]

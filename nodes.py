@@ -209,6 +209,13 @@ class AnomalousTTS_CharacterSpeech:
                     "tooltip": "normalize: each sentence's voice is brought to about -20 dBFS (peaks under -1 dBFS), so a new seed "
                                "or sentence does not jump in loudness. off: the loudness the model gives",
                 })),
+                "preset": ("STRING", _adv({
+                    "multiline": False,
+                    "default": "",
+                    "tooltip": "Empty: the presets decide (Anomalous: GPT-SoVITS Settings, and each character's generation "
+                               "settings). A preset's name (stable / standard / lively, or custom_… made in Anomalous): every "
+                               "sentence uses its numbers; speed is not part of a preset",
+                })),
             },
         }
 
@@ -242,7 +249,7 @@ class AnomalousTTS_CharacterSpeech:
     def generate(self, character, text, seed=0, speed=1.0, language=AUTO, reference_audio="", reference_text="",
                  gpt_weights=AUTO, sovits_weights=AUTO, pause_seconds=0.3, top_k=15, top_p=1.0,
                  temperature=1.0, repetition_penalty=1.35, batch_size=8, cross_lingual="adjust",
-                 volume="normalize"):
+                 volume="normalize", preset=""):
         chars = characters.scan(max_age=2.0)
         if character not in chars:
             raise ValueError(f"Character not found: {character}")
@@ -262,8 +269,11 @@ class AnomalousTTS_CharacterSpeech:
         own = c.settings.get("defaults") if isinstance(c.settings.get("defaults"), dict) else {}
         # Anomalous fills these inputs with the character's own `defaults`; only other values are the node's own.
         changed = {k: v for k, v in given.items() if v != TUNING_DEFAULTS[k] and v != own.get(k)}
-        tuner = tuning.Tuner(tuning.load(), changed, CROSS_LINGUAL_CHOICES.get(current_choice("cross_lingual", cross_lingual), True))
+        tuner = tuning.Tuner(tuning.load(), changed, CROSS_LINGUAL_CHOICES.get(current_choice("cross_lingual", cross_lingual), True),
+                             preset.strip())
         plan = planner.build_plan(chars, opts, text, tuner)
+        if preset.strip() and not tuner.chosen:
+            plan.warnings.append(f"没有叫 {preset.strip()} 的预设，按生成预设走")
         for message in plan.warnings:
             log.warning("[Anomalous_TTS] %s", message)
         if "ja" in {line.language for line in plan.lines} | {line.voice.ref_lang for line in plan.lines}:

@@ -25,7 +25,7 @@ Anomalous 推送剧本时只需要设置两个输入：
 | `character` | 下拉 | 值 = 角色名（见第 2 节 `name`） |
 | `text` | 多行文本 | 剧本，语法见第 4 节 |
 
-其他输入都是可选的，都有默认值（通过 `/prompt` 只传这两个也能运行），Anomalous 不需要碰。需要时可以设置：`language`（`auto` / `Japanese` / `Chinese` / `English`，也接受 `ja` / `zh` / `en`、`日文`、`japanese`、`cn`、`english` 等写法）、`seed`（整数）、`speed`（0.5–2.0）、`volume`（`normalize`：每句人声调到约 -20 dBFS，默认；`off`）。下拉选项以前是中文（`自动`、`日语`、`统一音量`、`自动调整`、`不调整` 等），旧名字照样接受。
+其他输入都是可选的，都有默认值（通过 `/prompt` 只传这两个也能运行），Anomalous 不需要碰。需要时可以设置：`language`（`auto` / `Japanese` / `Chinese` / `English`，也接受 `ja` / `zh` / `en`、`日文`、`japanese`、`cn`、`english` 等写法）、`seed`（整数）、`speed`（0.5–2.0）、`volume`（`normalize`：每句人声调到约 -20 dBFS，默认；`off`）、`preset`（文字，留空 = 按生成预设；填档名时每句都用这一档，见 5.4）。下拉选项以前是中文（`自动`、`日语`、`统一音量`、`自动调整`、`不调整` 等），旧名字照样接受。
 
 ## 2. 角色
 
@@ -310,7 +310,8 @@ ComfyUI 默认每个请求最大 100MB，权重常常更大，所以分块上传
 2. 角色的 `defaults`（`preset` 和 / 或数字、`speed`）；
 3. 这句话的语言和参考音频的语言不同时：这对语言的规则（`languages["ja>zh"]`），没有就用 `cross`（默认 `stable`）。节点的 `cross_lingual` 选 `off` 时没有这一层；
 4. 角色的 `defaults.by_language[这句话的语言]`；
-5. 节点上**改过**的输入（`speed`、`top_k`、`top_p`、`temperature`、`repetition_penalty` 不等于节点自己的默认值，也不等于这个角色 `defaults` 里的值）。
+5. 节点的 `preset` 输入填了档名（内置的或 `custom_…`）时：每句的四个采样参数都用这一档，语速照旧。预设文件里没有这一档时不算，`info` 里提示一句；
+6. 节点上**改过**的输入（`speed`、`top_k`、`top_p`、`temperature`、`repetition_penalty` 不等于节点自己的默认值，也不等于这个角色 `defaults` 里的值）。
 
 三档内置预设（`repetition_penalty` 都是 1.35，`top_p` 都是 1）：
 
@@ -369,7 +370,7 @@ window.anomalous_open_voice(character)  // → true：已打开浏览器的“�
 - 7（2026-09-26）：`import/inspect` 的 `problems` 不再包含“还缺 GPT / SoVITS 权重”（界面的待办清单自己显示）；`format` 改为 7。
 - 8（2026-09-26）：`import/inspect` 的 `problems` 不再逐条提醒不在 3~10 秒的音频（界面按 `seconds` 自己处理）；`browse?recursive=1` 不进入 GPT-SoVITS 程序和训练用的文件夹；`format` 改为 8。
 - 11（2026-09-29）：剧本语法加 `[take:N]`（只重做一段）；设置文件加 `defaults`（Anomalous 直接生成时用的语言、语速）；`pretrained/download` 必须写 `ids`，空请求体不再下载全部；文件名、角色名不能含不可见字符和改变文字方向的字符（如 U+202E）；`format` 改为 11。
-- 16（2026-10-17）：生成预设（5.4）：三档预设和 Anomalous 里自建的档（`custom_…`）、按语言组合的规则、预设文件和 `GET` / `POST /anomalous_tts/presets`。角色设置的 `defaults` 加 `preset` 和 `by_language`，节点开始读 `defaults` 里的 `preset`、`speed` 和采样参数（以前只有 Anomalous 读）；节点上的这几个输入只有改过时才算数。什么都没设时结果和 15 一样。`format` 改为 16。
+- 16（2026-10-17）：生成预设（5.4）：三档预设和 Anomalous 里自建的档（`custom_…`）、节点的 `preset` 输入（整段用一档）、按语言组合的规则、预设文件和 `GET` / `POST /anomalous_tts/presets`。角色设置的 `defaults` 加 `preset` 和 `by_language`，节点开始读 `defaults` 里的 `preset`、`speed` 和采样参数（以前只有 Anomalous 读）；节点上的这几个输入只有改过时才算数。什么都没设时结果和 15 一样。`format` 改为 16。
 - 15（2026-10-17）：支持 v3、v4、v5（v5dev / v5turbo）模型。角色摘要加 `version`、`needs`，详情加 `sovits_versions`；`import/inspect` 的 SoVITS 加 `needs`，v3 / v4 不再标 `supported: false`；`status.pretrained` 加 `v3`、`bigvgan`、`v4`、`v5dev`、`v5turbo` 五项（只在有角色用到时列出），`needed_for` 可以是模型版本。v3 / v4 / v5 的参考音频必须有台词（这些版本没有无参考文本模式）。`format` 改为 15。
 - 14（2026-10-10）：加 `GET /anomalous_tts/reference_lines`（一个角色每条音频的参考台词，只读，不收路径）；`format` 改为 14。
 - 13（2026-10-08）：没有接口再接受本机路径。存放位置、其他角色文件夹、底模来源只由用户编辑 `ComfyUI/user/anomalous_tts.json` 设置，节点只读：去掉 `POST /anomalous_tts/storage`（以及移动角色）、`POST /anomalous_tts/libraries`、`POST /anomalous_tts/pretrained/source`；`status` 去掉 `move`，加 `settings_file`；`libraries[].source: app` 改为指设置文件里的 `libraries`。去掉 `GET /anomalous_tts/browse`（含 `recursive=1`）和 `GET /anomalous_tts/import/preview`；导入的文件只能上传，`{"path": …}` 返回 400。`format` 改为 13。

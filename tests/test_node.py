@@ -11,7 +11,7 @@ def test_only_character_and_text_are_required():
     assert list(spec["required"]) == ["character", "text"]
     # ComfyUI saves widget values by position: the order must stay as it was, new inputs go last
     assert list(spec["optional"])[:3] == ["seed", "speed", "language"]
-    assert list(spec["optional"])[-1] == "volume"
+    assert list(spec["optional"])[-2:] == ["volume", "preset"]
 
 
 def test_language_aliases():
