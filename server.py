@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from aiohttp import web
 
-from .core import app_config, characters, dependencies, downloads, importer, paths, settings
+from .core import app_config, characters, checkpoints, dependencies, downloads, importer, paths, settings
 
 log = logging.getLogger("Anomalous_TTS")
 
@@ -70,14 +70,26 @@ def _save_settings(body: Dict[str, Any]) -> Dict[str, Any]:
     return {"ok": True, "character": _summary(characters.scan()[name], detail=True)}
 
 
+def _needs(c: characters.Character) -> List[str]:
+    try:
+        return c.pretrained_needs()
+    except Exception:  # one broken folder must not break the status
+        return []
+
+
 def _status_payload(local: bool) -> Dict[str, Any]:
     chars = list(characters.scan().values())
     libraries = paths.libraries()
     for lib in libraries:
         lib["characters"] = sum(1 for c in chars if paths.is_inside(c.folder, lib["path"]))
+    # A model version's own files are listed only while a character uses that version (or they are
+    # being downloaded): a library without v3 / v4 / v5 characters reports the same list as before.
+    needed = {item_id for c in chars for item_id in _needs(c)}
     pretrained = []
     for item in paths.pretrained_status():
         job = downloads.state(item["id"]) if item["state"] == "missing" else None
+        if item["needed_for"] in checkpoints.MEL_VERSIONS and item["id"] not in needed and not job:
+            continue
         pretrained.append({**item, **job} if job else item)
     deps = {}
     for lang in dependencies.LANG_PACKAGES:

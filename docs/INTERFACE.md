@@ -212,7 +212,7 @@ Anomalous 推送剧本时只需要设置两个输入：
 - `storage`：存放位置，导入的角色放在这里（没设置过就是 `models/gpt_sovits`）。`libraries[].storage` 标出它是哪一项。
 - `libraries[].source`：`default`（`models/gpt_sovits`）、`storage`（设置文件里的存放位置）、`app`（设置文件里的 `libraries`）、`yaml`（`extra_model_paths.yaml`）。`characters` 是这里的角色数。
 - `pretrained_sources`：设置文件里的 `pretrained`。
-- `pretrained[].id`：`hubert`、`roberta`、`g2pw`、`sv`、`english`、`ja_userdic`，以及 v3 / v4 / v5 模型用的 `v3`（v3 底模，v3 LoRA 用）、`bigvgan`（v3 声码器）、`v4`、`v5dev`、`v5turbo`（底模 + 声码器）。`needed_for`：`all` / `zh` / `en` / `ja` / `v2pro`，或模型版本 `v3` / `v4` / `v5dev` / `v5turbo`（只有用到这个版本的角色才需要；哪些角色要哪几项看 `characters[].needs`）。v3 / v4 / v5 的这几项从 Hugging Face `lj1995/GPT-SoVITS` 的一个固定版本下载，每个文件先核对 SHA-256；整合包（`pretrained`）里有的直接用。`required: false` 表示缺了也能用，只是效果差一点（g2pw 缺失时多音字改用 pypinyin；日语用户词典缺失时英文单词按字母读）。
+- `pretrained[].id`：`hubert`、`roberta`、`g2pw`、`sv`、`english`、`ja_userdic`，以及 v3 / v4 / v5 模型用的 `v3`（v3 底模，v3 LoRA 用）、`bigvgan`（v3 声码器）、`v4`、`v5dev`、`v5turbo`（底模 + 声码器）。`needed_for`：`all` / `zh` / `en` / `ja` / `v2pro`，或模型版本 `v3` / `v4` / `v5dev` / `v5turbo`。模型版本的这几项**只在有角色用到时才列出**（看各角色的 `needs`），正在下载或下载失败的也列出；没有 v3 / v4 / v5 角色时，列表和接口 14 一样。v3 / v4 / v5 的这几项从 Hugging Face `lj1995/GPT-SoVITS` 的一个固定版本下载，每个文件先核对 SHA-256；整合包（`pretrained`）里有的直接用。`required: false` 表示缺了也能用，只是效果差一点（g2pw 缺失时多音字改用 pypinyin；日语用户词典缺失时英文单词按字母读）。
 - `pretrained[].state`：`ok`（带 `path`）、`missing`、`queued`、`downloading`（带 `done`，已写入的字节数；`size` 是大约的总大小）、`error`（带 `error`）。
 - `dependencies` 只报告缺哪些包，`command` 是给运行 ComfyUI 的那个 Python 安装它们的命令。节点不替用户安装。
 - 每次实时计算；下载中可以每秒查一次。
@@ -260,7 +260,7 @@ ComfyUI 默认每个请求最大 100MB，权重常常更大，所以分块上传
 ```
 
 - `ref` 是这个文件在 `files` 里的序号，创建时用它指文件。
-- SoVITS 报告 `version`、`supported` 和 `needs`（同 5.1）。v1 到 v5 都支持；读不出版本的文件 `supported: false`，并写进 `problems`。
+- SoVITS 报告 `version`、`supported` 和 `needs`（同 5.1）。v1 到 v5 都能加载（v5 还没用真模型测过，说明里暂不提）；读不出版本的文件 `supported: false`，并写进 `problems`。
 - 音频报告 `seconds`；台词按第 3 节的规则从一起给的文件里找（同名 `.txt` / `.lab` → `.list` / 同格式 `.txt` 标注文件）；都没有、而文件名读起来像一句话时（至少 4 个汉字或假名，或带句读符号；开头的 `【开心】` 这类标签去掉），用文件名作建议。`text_source` 是 `txt`、`lab`、`list`、`filename` 或 `null`（没找到，让用户粘贴）。`filename` 只是导入时的建议，生成语音时节点从不按文件名猜台词。`language` 来自标注文件，没有就按台词判断。
 - `suggested.name` 取自 GPT 文件名（去掉 `-e<轮数>`）；`suggested.reference` 按第 3 节“自动挑主参考”的顺序（不看文件名）从 3~10 秒的音频里挑：有台词、陈述句、4~8 秒优先。
 - 带 `target` 时：每个文件多一个 `existing`，说明角色里同一位置有没有这个文件：`null`（没有，会复制）、`same`（完全一样，会跳过）、`merge`（都是标注文件，新的行会追加进去）、`different`（同名但内容不同，创建时会被拒绝）。台词也会在角色已有的标注文件和同名 `.txt` / `.lab` 里找（一条一条加音频时不用再带标注文件）。
@@ -327,7 +327,7 @@ window.anomalous_open_voice(character)  // → true：已打开浏览器的“�
 - 7（2026-09-26）：`import/inspect` 的 `problems` 不再包含“还缺 GPT / SoVITS 权重”（界面的待办清单自己显示）；`format` 改为 7。
 - 8（2026-09-26）：`import/inspect` 的 `problems` 不再逐条提醒不在 3~10 秒的音频（界面按 `seconds` 自己处理）；`browse?recursive=1` 不进入 GPT-SoVITS 程序和训练用的文件夹；`format` 改为 8。
 - 11（2026-09-29）：剧本语法加 `[take:N]`（只重做一段）；设置文件加 `defaults`（Anomalous 直接生成时用的语言、语速）；`pretrained/download` 必须写 `ids`，空请求体不再下载全部；文件名、角色名不能含不可见字符和改变文字方向的字符（如 U+202E）；`format` 改为 11。
-- 15（2026-10-17）：支持 v3、v4、v5（v5dev / v5turbo）模型。角色摘要加 `version`、`needs`，详情加 `sovits_versions`；`import/inspect` 的 SoVITS 加 `needs`，v3 / v4 不再标 `supported: false`；`status.pretrained` 加 `v3`、`bigvgan`、`v4`、`v5dev`、`v5turbo` 五项，`needed_for` 可以是模型版本。v3 / v4 / v5 的参考音频必须有台词（这些版本没有无参考文本模式）。`format` 改为 15。
+- 15（2026-10-17）：支持 v3、v4、v5（v5dev / v5turbo）模型。角色摘要加 `version`、`needs`，详情加 `sovits_versions`；`import/inspect` 的 SoVITS 加 `needs`，v3 / v4 不再标 `supported: false`；`status.pretrained` 加 `v3`、`bigvgan`、`v4`、`v5dev`、`v5turbo` 五项（只在有角色用到时列出），`needed_for` 可以是模型版本。v3 / v4 / v5 的参考音频必须有台词（这些版本没有无参考文本模式）。`format` 改为 15。
 - 14（2026-10-10）：加 `GET /anomalous_tts/reference_lines`（一个角色每条音频的参考台词，只读，不收路径）；`format` 改为 14。
 - 13（2026-10-08）：没有接口再接受本机路径。存放位置、其他角色文件夹、底模来源只由用户编辑 `ComfyUI/user/anomalous_tts.json` 设置，节点只读：去掉 `POST /anomalous_tts/storage`（以及移动角色）、`POST /anomalous_tts/libraries`、`POST /anomalous_tts/pretrained/source`；`status` 去掉 `move`，加 `settings_file`；`libraries[].source: app` 改为指设置文件里的 `libraries`。去掉 `GET /anomalous_tts/browse`（含 `recursive=1`）和 `GET /anomalous_tts/import/preview`；导入的文件只能上传，`{"path": …}` 返回 400。`format` 改为 13。
 - 12（2026-10-08）：节点的下拉选项改为英文：`language` 是 `auto` / `Japanese` / `Chinese` / `English`，`gpt_weights`、`sovits_weights` 的自动是 `auto`，`cross_lingual` 是 `adjust` / `off`，`volume` 是 `normalize` / `off`；以前的中文选项名照样接受。显示名改为 `Character Speech (GPT-SoVITS)`，中文界面的名字和提示来自 `locales/zh/`。`format` 改为 12。

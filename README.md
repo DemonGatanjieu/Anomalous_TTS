@@ -4,7 +4,7 @@
 
 它是 [Anomalous Model Browser](https://github.com/DemonGatanjieu/Anomalous_Model_Browser) 的配套节点包。两个一起装，可以在 Anomalous 里拖入文件导入角色、标注情绪、改读音，然后在剧本台直接生成；只装这一个也能用，角色文件夹需要自己放好。
 
-> **English**: A ComfyUI node that speaks scripts with your trained GPT-SoVITS character models (v1, v2, v2Pro, v2ProPlus, v3, v4, v5; Japanese, Chinese, English), with emotion tags, multiple speakers and pauses. No separate GPT-SoVITS install is needed. It is the companion of [Anomalous Model Browser](https://github.com/DemonGatanjieu/Anomalous_Model_Browser), which imports characters, edits emotions and pronunciations, and generates scripts from its Script Director. The node's buttons follow ComfyUI's language; the rest of this page is in Chinese.
+> **English**: A ComfyUI node that speaks scripts with your trained GPT-SoVITS character models (v1, v2, v2Pro, v2ProPlus, v3, v4; Japanese, Chinese, English), with emotion tags, multiple speakers and pauses. No separate GPT-SoVITS install is needed. It is the companion of [Anomalous Model Browser](https://github.com/DemonGatanjieu/Anomalous_Model_Browser), which imports characters, edits emotions and pronunciations, and generates scripts from its Script Director. The node's buttons follow ComfyUI's language; the rest of this page is in Chinese.
 
 📺 **视频演示**：[在 B 站看配音演示](https://www.bilibili.com/video/BV1bkpZ6uEZQ/)（Video demo on Bilibili, in Chinese）
 
@@ -56,7 +56,7 @@
 
 ## 支持范围
 
-- 模型：v1、v2、v2Pro、v2ProPlus、v3、v4、v5（v5dev / v5turbo）。v3 / v4 / v5 还要各自的官方底模和声码器（见下面的底模表），参考音频必须有台词。
+- 模型：v1、v2、v2Pro、v2ProPlus、v3、v4。v3 / v4 还要各自的官方底模和声码器（见下面的底模表），参考音频必须有台词。
 - 语言：日语、中文、英语。跨语言（比如日语角色说中文）也可以，会带一点口音，这是模型本身的。
 - 改了台词里的一句，再运行只重新生成这一句；同样的输入得到同样的声音。
 - 每句自动调到同样的音量，换种子、换句子不会忽大忽小。
@@ -127,7 +127,6 @@ anomalous_tts:
 | v3 LoRA | `s2Gv3.pth` | 770MB | HuggingFace（固定版本，下载后核对 SHA-256，下同） |
 | v3 | `models--nvidia--bigvgan_v2_24khz_100band_256x/` | 450MB | HuggingFace |
 | v4 | `gsv-v4-pretrained/`（`s2Gv4.pth`、`vocoder.pth`） | 830MB | HuggingFace |
-| v5dev / v5turbo | `gsv-v5-pretrained/`（`s2Gv5dev.pth` 或 `s2Gv5turbo.pth`，加 `vocoder.pth`） | 各 820MB | HuggingFace |
 | 日语里的英文单词 | `ja_userdic/userdict.csv` | 17MB | GitHub（GPT-SoVITS 固定版本） |
 | 英语 | 英语词典 + nltk 词性数据 | 约 30MB | GitHub |
 

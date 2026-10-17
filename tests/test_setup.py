@@ -109,8 +109,15 @@ def test_status_counts_characters_per_library(fresh):
     assert status["settings_file"] == app_config.path()
     counts = {l["path"]: l["characters"] for l in status["libraries"]}
     assert counts[paths.norm(str(lib))] == 2
-    assert [p["id"] for p in status["pretrained"]] == list(paths.PRETRAINED_IDS)
+    shared = ["hubert", "roberta", "g2pw", "sv", "english", "ja_userdic"]
+    assert [p["id"] for p in status["pretrained"]] == shared  # no v3 / v4 / v5 character: as before
     assert set(status["dependencies"]) == {"ja", "zh", "en"}
+
+    # A v4 character (its newest SoVITS is a v4 LoRA) brings in the v4 base model and vocoder only.
+    (make_char(lib, "光") / "SoVITS_weights_v2" / "X_e16_s160.pth").write_bytes(b"04" + b"\0" * 100)
+    characters.invalidate()
+    status = server._status_payload(local=True)
+    assert [p["id"] for p in status["pretrained"]] == shared + ["v4"]
 
 
 def test_writes_are_refused_from_other_computers():

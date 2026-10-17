@@ -241,8 +241,15 @@ class Character:
     def _default_sovits_kind(self):
         try:
             return self.sovits_kind(self.weight("sovits"))
-        except ValueError:  # no .pth, or the settings name a missing one
+        except (OSError, ValueError):  # no .pth, or the settings name a missing one
             return None
+
+    def pretrained_needs(self) -> List[str]:
+        """Pretrained ids the default SoVITS model needs besides the shared ones (paths.pretrained_for)."""
+        from . import paths
+
+        kind = self._default_sovits_kind
+        return paths.pretrained_for(kind.version, kind.lora) if kind else []
 
     def weight(self, kind: str, rel: Optional[str] = None) -> str:
         """Absolute path of a GPT (kind="gpt") or SoVITS ("sovits") weight."""
@@ -340,8 +347,6 @@ class Character:
 
     def to_api(self, detail: bool = False) -> Dict[str, Any]:
         """docs/INTERFACE.md §5. The list view leaves out the file lists (they can be long)."""
-        from . import paths
-
         ref = self.default_reference()
         kind = self._default_sovits_kind
         out: Dict[str, Any] = {
@@ -353,7 +358,7 @@ class Character:
             "settings_error": self.settings_error,
             "counts": {"gpt": len(self.gpt), "sovits": len(self.sovits), "audio": len(self.audio)},
             "version": kind.version if kind else None,
-            "needs": paths.pretrained_for(kind.version, kind.lora) if kind else [],
+            "needs": self.pretrained_needs(),
             "reference": ref.to_api() if ref else None,
             "emotions": {k: v.to_api() for k, v in self.emotions().items()},
         }
