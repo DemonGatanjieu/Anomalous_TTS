@@ -227,6 +227,23 @@ class Character:
         pattern, pairs = self._respelling
         return pattern.sub(lambda m: pairs[m.group(0)], text)
 
+    @staticmethod
+    def sovits_kind(path: str):
+        """Version of a SoVITS file from its header (checkpoints.SovitsKind), None if unreadable."""
+        from .checkpoints import detect_sovits_version
+
+        try:
+            return detect_sovits_version(path)
+        except (OSError, ValueError):
+            return None
+
+    @cached_property
+    def _default_sovits_kind(self):
+        try:
+            return self.sovits_kind(self.weight("sovits"))
+        except ValueError:  # no .pth, or the settings name a missing one
+            return None
+
     def weight(self, kind: str, rel: Optional[str] = None) -> str:
         """Absolute path of a GPT (kind="gpt") or SoVITS ("sovits") weight."""
         files = getattr(self, kind)
@@ -323,7 +340,10 @@ class Character:
 
     def to_api(self, detail: bool = False) -> Dict[str, Any]:
         """docs/INTERFACE.md §5. The list view leaves out the file lists (they can be long)."""
+        from . import paths
+
         ref = self.default_reference()
+        kind = self._default_sovits_kind
         out: Dict[str, Any] = {
             "name": self.name,
             "aliases": self.aliases,
@@ -332,11 +352,15 @@ class Character:
             "settings": self.settings,
             "settings_error": self.settings_error,
             "counts": {"gpt": len(self.gpt), "sovits": len(self.sovits), "audio": len(self.audio)},
+            "version": kind.version if kind else None,
+            "needs": paths.pretrained_for(kind.version, kind.lora) if kind else [],
             "reference": ref.to_api() if ref else None,
             "emotions": {k: v.to_api() for k, v in self.emotions().items()},
         }
         if detail:
             out.update(gpt=self.gpt, sovits=self.sovits, audio=self.audio)
+            kinds = {rel: self.sovits_kind(self.abspath(rel)) for rel in self.sovits}
+            out["sovits_versions"] = {rel: k.version for rel, k in kinds.items() if k}
         return out
 
 

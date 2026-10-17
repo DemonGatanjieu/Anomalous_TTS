@@ -1,4 +1,5 @@
-"""Nothing read from a data file runs as code, and the G2PWModel download is the pinned file.
+"""Nothing read from a data file runs as code, and downloads are the pinned files (G2PWModel, the
+v3 / v4 / v5 pretrained models).
 
 ComfyUI-Manager's review asked for this: g2pW's config.py comes inside a downloaded archive, and
 folders added from the UI decide which copy is read.
@@ -89,5 +90,44 @@ def test_no_code_loading_from_files():
             continue
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if pattern.search(line.split("#", 1)[0]):  # comments may name them
+                found.append(f"{path.relative_to(ROOT)}:{number}: {line.strip()}")
+    assert found == []
+
+
+def test_pinned_pretrained_with_another_checksum_is_deleted(tmp_path, monkeypatch):
+    import huggingface_hub
+
+    target, asked = tmp_path / "pretrained", []
+
+    def fake_hf(repo, filename, revision, local_dir):
+        asked.append((repo, filename, revision))
+        path = Path(local_dir) / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"not the model")
+        return str(path)
+
+    monkeypatch.setattr(paths, "_download_target", lambda: str(target))
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", fake_hf)
+    with pytest.raises(RuntimeError, match="SHA-256"):
+        paths.fetch("v4")
+    assert asked == [(paths.HF_REPO, "gsv-v4-pretrained/s2Gv4.pth", paths.HF_REVISION)]
+    assert not (target / "gsv-v4-pretrained" / "s2Gv4.pth").exists() and paths.locate("v4") is None
+
+    digest = hashlib.sha256(b"not the model").hexdigest()
+    monkeypatch.setitem(paths.PINNED, "v4", ("gsv-v4-pretrained", {"s2Gv4.pth": digest, "vocoder.pth": digest}))
+    paths.fetch("v4")
+    assert sorted(os.listdir(target / "gsv-v4-pretrained")) == ["s2Gv4.pth", "vocoder.pth"]
+    asked.clear()
+    assert paths.vocoder("v4") == os.path.join(str(target), "gsv-v4-pretrained", "vocoder.pth") and asked == []
+
+
+def test_weights_load_without_running_code():
+    """Every torch.load in the node's code (vendored code included) refuses pickled code."""
+    found = []
+    for path in ROOT.rglob("*.py"):
+        if "tests" in path.relative_to(ROOT).parts or "tools" in path.relative_to(ROOT).parts:
+            continue
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if "torch.load(" in line.split("#", 1)[0] and "weights_only=True" not in line and "``" not in line:
                 found.append(f"{path.relative_to(ROOT)}:{number}: {line.strip()}")
     assert found == []

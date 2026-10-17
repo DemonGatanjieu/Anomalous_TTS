@@ -33,11 +33,54 @@ FILES = [
     "text/english.py", "text/en_normalization/expend.py",
     # v2Pro / v2ProPlus speaker embedding
     "eres2net/ERes2NetV2.py", "eres2net/fusion.py", "eres2net/kaldi.py", "eres2net/pooling_layers.py",
-]
+    # v3 / v4 / v5: mel diffusion (F5-TTS DiT) and the v3 vocoder (NVIDIA BigVGAN, MIT)
+    "module/models_v5.py",
+    "f5_tts/model/__init__.py", "f5_tts/model/modules.py", "f5_tts/model/backbones/dit.py",
+    "BigVGAN/bigvgan.py", "BigVGAN/activations.py", "BigVGAN/env.py", "BigVGAN/utils0.py", "BigVGAN/LICENSE",
+    "BigVGAN/alias_free_activation/torch/__init__.py", "BigVGAN/alias_free_activation/torch/act.py",
+    "BigVGAN/alias_free_activation/torch/filter.py", "BigVGAN/alias_free_activation/torch/resample.py",
+] + [f"BigVGAN/incl_licenses/LICENSE_{i}" for i in range(1, 9)]
 for f in FILES:
     (ROOT / f).parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(SRC / f, ROOT / f)
 shutil.copyfile(SRC.parent / "LICENSE", ROOT / "LICENSE")
+# Upstream finds these folders through sys.path; here they are packages.
+for package in ("f5_tts", "f5_tts/model/backbones", "BigVGAN", "BigVGAN/alias_free_activation"):
+    (ROOT / package / "__init__.py").touch()
+
+# The DiT's rotary embedding, the two pieces of lucidrains' x-transformers (MIT) it uses, so the
+# package is not a dependency. Same math as x-transformers 2.x (tests/test_versions.py compares).
+(ROOT / "f5_tts" / "model" / "rotary.py").write_text('''"""Rotary position embedding from x-transformers (MIT, Phil Wang), written out by
+tools/sync_upstream.py so that package is not needed. Only what the F5-TTS DiT calls."""
+import torch
+from torch import nn
+
+
+class RotaryEmbedding(nn.Module):
+    def __init__(self, dim, base=10000):
+        super().__init__()
+        self.register_buffer("inv_freq", 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim)))
+
+    def forward_from_seq_len(self, seq_len):
+        t = torch.arange(seq_len, device=self.inv_freq.device).type_as(self.inv_freq)
+        freqs = torch.einsum("i , j -> i j", t, self.inv_freq)
+        return torch.stack((freqs, freqs), dim=-1).flatten(-2).unsqueeze(0), 1.0
+
+
+def rotate_half(x):
+    x1, x2 = x.unflatten(-1, (-1, 2)).unbind(dim=-1)
+    return torch.stack((-x2, x1), dim=-1).flatten(-2)
+
+
+def apply_rotary_pos_emb(t, freqs, scale=1):
+    rot_dim, seq_len, orig_dtype = freqs.shape[-1], t.shape[-2], t.dtype
+    freqs = freqs[:, -seq_len:, :]
+    if t.ndim == 4 and freqs.ndim == 3:
+        freqs = freqs.unsqueeze(1)
+    t, t_unrotated = t[..., :rot_dim], t[..., rot_dim:]
+    t = (t * freqs.cos() * scale) + (rotate_half(t) * freqs.sin() * scale)
+    return torch.cat((t, t_unrotated), dim=-1).type(orig_dtype)
+''', encoding="utf-8", newline="\n")
 
 # Upstream ships the English names dictionary only as a pickle. It is turned into text here, from
 # the pinned checkout, so the node itself never unpickles anything (text/english.py reads the text).
@@ -67,11 +110,18 @@ p("AR/modules/transformer.py", "from AR.modules.activation import", "from .activ
 p("AR/modules/transformer.py", "from AR.modules.scaling import", "from .scaling import")
 p("AR/modules/activation.py", "from AR.modules.patched_mha_with_cache import", "from .patched_mha_with_cache import")
 p("module/models.py", "from module import commons\nfrom module import modules\nfrom module import attentions\nfrom f5_tts.model import DiT\n",
-  "from . import commons\nfrom . import modules\nfrom . import attentions\n# Anomalous_TTS: v3/v4 (DiT/CFM) not supported; import removed.\n")
+  "from . import commons\nfrom . import modules\nfrom . import attentions\nfrom ..f5_tts.model import DiT\n")
 p("module/models.py", "from module.commons import init_weights, get_padding\nfrom module.mrte_model import MRTE\nfrom module.quantize import ResidualVectorQuantizer\n",
   "from .commons import init_weights, get_padding\nfrom .mrte_model import MRTE\nfrom .quantize import ResidualVectorQuantizer\n")
 p("module/models.py", "from text import symbols as symbols_v1\nfrom text import symbols2 as symbols_v2\n",
   "from ..text import symbols as symbols_v1\nfrom ..text import symbols2 as symbols_v2\n")
+p("module/models.py", "            from module.models_v5 import CFMV5\n", "            from .models_v5 import CFMV5\n")
+p("module/models_v5.py", "from module.models import CFM\n", "from .models import CFM\n")
+p("f5_tts/model/__init__.py", "from GPT_SoVITS.f5_tts.model.backbones.dit import DiT", "from .backbones.dit import DiT")
+p("f5_tts/model/modules.py", "from x_transformers.x_transformers import apply_rotary_pos_emb\n", "from .rotary import apply_rotary_pos_emb\n")
+p("f5_tts/model/backbones/dit.py", "from x_transformers.x_transformers import RotaryEmbedding\n", "from ..rotary import RotaryEmbedding\n")
+p("f5_tts/model/backbones/dit.py", "from GPT_SoVITS.f5_tts.model.modules import (", "from ..modules import (")
+p("f5_tts/model/backbones/dit.py", "from module.commons import sequence_mask\n", "from ....module.commons import sequence_mask\n")
 p("module/modules.py", "from module import commons\nfrom module.commons import init_weights, get_padding\nfrom module.transforms import",
   "from . import commons\nfrom .commons import init_weights, get_padding\nfrom .transforms import")
 p("module/attentions.py", "from module import commons\nfrom module.modules import LayerNorm", "from . import commons\nfrom .modules import LayerNorm")
@@ -82,8 +132,20 @@ p("module/core_vq.py", "from module.distrib import broadcast_tensors, is_distrib
   "def broadcast_tensors(*args, **kwargs):\n    pass\n\n\ndef is_distributed():\n    return False\n\n\n"
   "class SyncFunction:\n    @staticmethod\n    def apply(x):\n        return x\n\n\n")
 p("module/mel_processing.py", "from librosa.filters import mel as librosa_mel_fn\n",
-  "# Anomalous_TTS: librosa imported lazily; only mel_spectrogram needs it.\n"
-  "def librosa_mel_fn(*args, **kwargs):\n    from librosa.filters import mel\n\n    return mel(*args, **kwargs)\n")
+  "import torchaudio.functional\n\n\n"
+  "# Anomalous_TTS: librosa's mel filters (its defaults: Slaney scale and norm) from torchaudio, so\n"
+  "# librosa is not a dependency (tests/test_versions.py compares the two).\n"
+  "def librosa_mel_fn(sr, n_fft, n_mels, fmin, fmax):\n"
+  "    fbanks = torchaudio.functional.melscale_fbanks(\n"
+  "        n_fft // 2 + 1, float(fmin), float(sr / 2 if fmax is None else fmax), n_mels, sr, norm=\"slaney\", mel_scale=\"slaney\"\n"
+  "    )\n"
+  "    return fbanks.T.contiguous().numpy()\n")
+
+# --- BigVGAN (v3 vocoder): core/models.py builds it from a local folder (config read as JSON,
+# weights with weights_only=True). The Hugging Face download and save methods are cut off. ---
+p("BigVGAN/bigvgan.py", "\nfrom huggingface_hub import PyTorchModelHubMixin, hf_hub_download\n", "")
+p("BigVGAN/bigvgan.py", "    with open(path) as f:\n", "    with open(path, encoding=\"utf-8\") as f:\n")
+p("BigVGAN/bigvgan.py", "class BigVGAN(\n    torch.nn.Module,\n    PyTorchModelHubMixin,\n", "class BigVGAN(\n    torch.nn.Module,\n")
 
 # --- Chinese front end ---
 p("text/chinese2.py", "import cn2an\n", "")
@@ -382,6 +444,13 @@ p("text/tone_sandhi.py", '                and word not in self.must_not_neural_t
 # --- speaker verification (v2Pro) ---
 p("eres2net/ERes2NetV2.py", "import pooling_layers as pooling_layers\nfrom fusion import AFF\n",
   "from . import pooling_layers as pooling_layers\nfrom .fusion import AFF\n")
+
+path = ROOT / "BigVGAN" / "bigvgan.py"
+text = path.read_text(encoding="utf-8")
+cut = text.find("\n    # Additional methods for huggingface_hub support\n")
+if cut < 0 or not text.rstrip().endswith("return model"):
+    print("PATCH FAILED: BigVGAN/bigvgan.py: huggingface_hub methods not found"); sys.exit(1)
+path.write_text(text[:cut] + "\n", encoding="utf-8")
 
 bad = 0
 for f, old, new in P:

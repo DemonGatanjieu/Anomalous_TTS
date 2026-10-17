@@ -9,7 +9,7 @@ from typing import Callable, Hashable, Optional, Protocol, Tuple, TypeVar
 
 import torch
 
-from .checkpoints import load_gpt_checkpoint, load_sovits_checkpoint
+from .checkpoints import MEL_VERSIONS, load_gpt_checkpoint, load_sovits_checkpoint
 
 log = logging.getLogger("Anomalous_TTS")
 T = TypeVar("T")
@@ -28,6 +28,12 @@ class Resources(Protocol):
 
     def english_dirs(self) -> Tuple[str, str]:
         """(dictionary dir, nltk data dir)"""
+
+    def sovits_pretrained(self, version: str) -> str:
+        """The official SoVITS model a v3 / v4 / v5 LoRA file is merged into."""
+
+    def vocoder(self, version: str) -> str:
+        """The v3 BigVGAN folder, or the v4 / v5 ``vocoder.pth``."""
 
 
 class LRU(OrderedDict):
@@ -89,21 +95,23 @@ class GPTModel:
 
 
 class SoVITSModel:
-    def __init__(self, path: str, device: torch.device, dtype: torch.dtype):
-        from ..vendor.gpt_sovits.module.models import SynthesizerTrn
+    def __init__(self, path: str, device: torch.device, dtype: torch.dtype, pretrained: Callable[[str], str]):
+        from ..vendor.gpt_sovits.module.models import SynthesizerTrn, SynthesizerTrnV3
 
-        data, version = load_sovits_checkpoint(path)
+        data, version = load_sovits_checkpoint(path, pretrained)
         self.version = version
         self.is_v2pro = version in ("v2Pro", "v2ProPlus")
+        self.makes_mel = version in MEL_VERSIONS
         hps = data["config"]
         hps["model"]["semantic_frame_rate"] = "25hz"
         hps["model"]["version"] = version
         d = hps["data"]
-        self.sampling_rate = d["sampling_rate"]
+        self.sampling_rate = d["sampling_rate"]  # of the reference spectrogram
+        self.output_rate = (24000 if version == "v3" else 48000) if self.makes_mel else self.sampling_rate
         self.filter_length = d["filter_length"]
         self.hop_length = d["hop_length"]
         self.win_length = d["win_length"]
-        model = SynthesizerTrn(
+        model = (SynthesizerTrnV3 if self.makes_mel else SynthesizerTrn)(
             self.filter_length // 2 + 1,
             hps["train"]["segment_size"] // self.hop_length,
             n_speakers=d["n_speakers"],
@@ -112,9 +120,35 @@ class SoVITSModel:
         if hasattr(model, "enc_q"):
             del model.enc_q  # posterior encoder: training only
         result = model.load_state_dict(data["weight"], strict=False)
-        if result.missing_keys:
-            log.warning(
-                "[Anomalous_TTS] %s 缺少 %d 个权重：%s",
-                os.path.basename(path), len(result.missing_keys), result.missing_keys[:5],
-            )
+        # The rotary table is computed; only LoRA files happen to store it.
+        missing = [k for k in result.missing_keys if not k.endswith("rotary_embed.inv_freq")]
+        if missing:
+            log.warning("[Anomalous_TTS] %s 缺少 %d 个权重：%s", os.path.basename(path), len(missing), missing[:5])
         self.model = model.to(device=device, dtype=dtype).eval()
+
+
+def load_vocoder(version: str, path: str, device: torch.device, dtype: torch.dtype) -> torch.nn.Module:
+    """Mel spectrogram -> audio for v3 (BigVGAN, 24 kHz) and v4 / v5 (GPT-SoVITS' HiFi-GAN, 48 kHz),
+    built like ``init_bigvgan`` / ``init_hifigan`` in GPT-SoVITS ``inference_webui.py``."""
+    if version == "v3":
+        from ..vendor.gpt_sovits.BigVGAN import bigvgan
+
+        model = bigvgan.BigVGAN(bigvgan.load_hparams_from_json(os.path.join(path, "config.json")))
+        state = torch.load(os.path.join(path, "bigvgan_generator.pt"), map_location="cpu", weights_only=True)
+        try:
+            model.load_state_dict(state["generator"])
+            model.remove_weight_norm()
+        except RuntimeError:  # a copy saved without weight norm, as BigVGAN's own loader allows
+            model.remove_weight_norm()
+            model.load_state_dict(state["generator"])
+    else:
+        from ..vendor.gpt_sovits.module.models import Generator
+
+        model = Generator(
+            initial_channel=100, resblock="1", resblock_kernel_sizes=[3, 7, 11],
+            resblock_dilation_sizes=[[1, 3, 5], [1, 3, 5], [1, 3, 5]], upsample_rates=[10, 6, 2, 2, 2],
+            upsample_initial_channel=512, upsample_kernel_sizes=[20, 12, 4, 4, 4], gin_channels=0, is_bias=True,
+        )
+        model.remove_weight_norm()
+        model.load_state_dict(torch.load(path, map_location="cpu", weights_only=True))
+    return model.to(device=device, dtype=dtype).eval()

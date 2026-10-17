@@ -31,13 +31,14 @@ assets/
 | `test_planner.py` | 角色识别、情绪、换人、停顿、每句种子、自动挑主参考（避开问句）、读音替换 |
 | `test_audio.py` | 每句音量统一：只看人声部分、峰值上限、静音不动、关掉时原样 |
 | `test_node.py` | 节点输入：只有 character、text 必填，控件顺序不变；`language` 的别名；选项是英文，旧工作流里的中文选项值照样能用 |
-| `test_safety.py` | 数据文件不会被当代码执行：g2pW 的 `config.py` 只当数据读；G2PWModel 下载的 SHA-256 不对时什么都不解压；代码里没有 `pickle.load`、`exec_module`、`eval(` |
+| `test_safety.py` | 数据文件不会被当代码执行：g2pW 的 `config.py` 只当数据读；G2PWModel 下载的 SHA-256 不对时什么都不解压；v3 / v4 / v5 底模从固定版本下载，SHA-256 不对就删掉；所有 `torch.load` 都带 `weights_only=True`；代码里没有 `pickle.load`、`exec_module`、`eval(` |
 | `test_import.py` | 分块上传、检查（版本 / 时长 / 台词 / 建议的主参考）、新建和追加角色、导入时改名、失败时角色库不变 |
 | `test_setup.py` | 设置文件里的底模来源、后台下载、准备状态、只允许本机写入 |
 | `test_storage.py` | 存放位置和角色文件夹只来自设置文件；没有接口接受本机路径（路由清单固定，按路径导入被拒）；坏的设置项被忽略；存放位置暂时不在时不换地方 |
 | `test_frontend.py` | 日 / 中 / 英音素与基准一致（基准已和官方 GPT-SoVITS 对过，见 UPSTREAM.md） |
 | `test_vram.py` | ComfyUI 显存不够时让出我们的模型，够时留着 |
 | `test_structure.py` | 每个源码文件在 ARCHITECTURE.md 里都有一行、每个模块都从 `__init__.py` 导入到；超过 600 行时警告 |
+| `test_versions.py` | SoVITS 版本识别（文件头 `00`~`08`）、每个版本要哪些底模、LoRA 合并（`W + B @ A`）、旋转位置编码和梅尔滤波器与 x-transformers / librosa 一致（装了才比） |
 | `test_engine.py` | 批量解码与官方逐句解码结果完全相同；批量分组不影响结果；缓存和可复现性 |
 
 改了文字处理并确认和官方一致后，用 `tools/make_frontend_fixtures.py` 重新生成基准。

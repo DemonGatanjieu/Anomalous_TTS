@@ -31,14 +31,13 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from . import characters, paths, settings as settings_mod
-from .checkpoints import detect_sovits_version
+from .checkpoints import SUPPORTED_SOVITS, detect_sovits_version
 from .langdetect import detect
 
 STAGING = ".anomalous_tts_staging"
 STAGING_MAX_AGE = 24 * 3600
 MAX_UPLOAD = 8 * 1024**3
 SUBFOLDER = {"gpt": "GPT_weights", "sovits": "SoVITS_weights", "audio": "参考音频", "text": "参考音频"}
-SUPPORTED_SOVITS = {"v1", "v2", "v2Pro", "v2ProPlus"}
 _RESERVED = re.compile(r"^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$", re.I)
 # What Windows forbids, plus invisible and direction-changing characters (U+202E can
 # make a name display as something else).
@@ -279,10 +278,10 @@ def inspect(specs: Any, target: Any = None) -> Dict[str, Any]:
             problems.append(f"{s.name} 看起来不是 GPT-SoVITS 的 GPT 权重")
         elif s.kind == "sovits":
             try:
-                item["version"] = detect_sovits_version(s.path)[1]
-                item["supported"] = item["version"] in SUPPORTED_SOVITS
-                if not item["supported"]:
-                    problems.append(f"{s.name} 是 {item['version']} 模型，暂不支持（支持 v1、v2、v2Pro、v2ProPlus）")
+                kind = detect_sovits_version(s.path)
+                item["version"] = kind.version
+                item["supported"] = kind.version in SUPPORTED_SOVITS
+                item["needs"] = paths.pretrained_for(kind.version, kind.lora)
             except ValueError as e:
                 item["supported"] = False
                 problems.append(str(e))

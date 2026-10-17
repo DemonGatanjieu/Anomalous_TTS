@@ -23,7 +23,7 @@ import torch
 
 from . import dependencies, t2s_batch, text_frontend
 from .audio import level, load_mono, resample, silence
-from .models import LRU, GPTModel, Resources, SoVITSModel, file_key
+from .models import LRU, GPTModel, Resources, SoVITSModel, file_key, load_vocoder
 from .planner import Gap, Line, Plan, Voice
 
 log = logging.getLogger("Anomalous_TTS")
@@ -36,6 +36,13 @@ REF_MAX_SEC = 10.0
 CROSS_LINGUAL_TOP_K = 10
 CROSS_LINGUAL_TEMPERATURE = 0.8
 AUDIO_CACHE_BYTES = 64 * 1024 * 1024  # ~8 minutes of speech, enough to redo one line of a script
+# v3 / v4 / v5 (GPT-SoVITS ``get_tts_wav``): diffusion steps and CFG the official UI starts with, the
+# reference mel (rate, n_fft = window, hop), and the reference / total frames of one diffusion chunk.
+MEL_STEPS = {"v3": 32, "v4": 8, "v5dev": 32, "v5turbo": 4}
+MEL_CFG = {"v5dev": 1.30}
+MEL_SPEC = {"v3": (24000, 1024, 256), "v4": (32000, 1280, 320)}  # v5 as v4
+MEL_CHUNK = {"v3": (468, 934)}  # others (500, 1000); v5 chunks itself (synthesize_v5_mel)
+SPEC_MIN, SPEC_MAX = -12, 2
 
 
 @dataclass
@@ -83,6 +90,7 @@ class _Reference:
     bert: Optional[torch.Tensor]  # (1024, len(phones))
     spec: torch.Tensor
     sv_emb: Optional[torch.Tensor]
+    mel: Optional[torch.Tensor] = None  # v3 / v4 / v5: normalized mel of the reference audio
 
 
 class Engine:
@@ -101,6 +109,7 @@ class Engine:
         self._warned: Dict[str, bool] = {}
         self._gpt = LRU(capacity=3)
         self._sovits = LRU(capacity=3)
+        self._vocoders = LRU(capacity=2)
         self._refs = LRU(capacity=32)
         self._tokens = LRU(capacity=4096)
         self._audio = LRU(max_bytes=AUDIO_CACHE_BYTES, sizeof=lambda a: a[0].nbytes)
@@ -110,7 +119,14 @@ class Engine:
         return self._gpt.get_or_create(file_key(path), lambda: GPTModel(path, self.device, self.dtype))
 
     def sovits(self, path: str) -> SoVITSModel:
-        return self._sovits.get_or_create(file_key(path), lambda: SoVITSModel(path, self.device, self.dtype))
+        return self._sovits.get_or_create(
+            file_key(path), lambda: SoVITSModel(path, self.device, self.dtype, self.resources.sovits_pretrained)
+        )
+
+    def vocoder(self, version: str) -> torch.nn.Module:
+        return self._vocoders.get_or_create(
+            version, lambda: load_vocoder(version, self.resources.vocoder(version), self.device, self.dtype)
+        )
 
     def hubert(self):
         if self._hubert is None:
@@ -142,7 +158,7 @@ class Engine:
         return self._sv
 
     def holds_models(self) -> bool:
-        return bool(self._gpt or self._sovits or self._hubert or self._roberta or self._sv)
+        return bool(self._gpt or self._sovits or self._vocoders or self._hubert or self._roberta or self._sv)
 
     def holds_anything(self) -> bool:
         """Models, the g2pW session or cached sentences: what "Unload models" should also free."""
@@ -160,6 +176,7 @@ class Engine:
             self._hubert = self._roberta = self._sv = None
             self._gpt.clear()
             self._sovits.clear()
+            self._vocoders.clear()
             self._refs.clear()
             if self._zh_ready:
                 from ..vendor.gpt_sovits.text import chinese2
@@ -273,18 +290,35 @@ class Engine:
             sv_emb = self.sv().forward3(feat)
         return spec.to(self.dtype), sv_emb
 
+    def _reference_mel(self, sovits: SoVITSModel, wav_path: str) -> torch.Tensor:
+        """``mel_fn`` / ``mel_fn_v4`` of the reference audio, normalized like ``norm_spec``."""
+        import torchaudio.functional as AF
+
+        from ..vendor.gpt_sovits.module.mel_processing import mel_spectrogram_torch
+
+        rate, n_fft, hop = MEL_SPEC.get(sovits.version, MEL_SPEC["v4"])
+        wav, sr = load_mono(wav_path)
+        audio = torch.from_numpy(wav).unsqueeze(0).float().to(self.device)
+        if sr != rate:
+            audio = AF.resample(audio, sr, rate)
+        mel = mel_spectrogram_torch(audio, n_fft, 100, rate, hop, n_fft, 0, None, center=False)
+        return ((mel - SPEC_MIN) / (SPEC_MAX - SPEC_MIN) * 2 - 1).to(self.dtype)
+
     def _reference(self, voice: Voice, sovits: SoVITSModel) -> _Reference:
         key = (file_key(voice.sovits_path), file_key(voice.ref_wav), voice.ref_text, voice.ref_lang)
 
         def build() -> _Reference:
             spec, sv_emb = self._spec_and_sv(sovits, voice.ref_wav)
             if not voice.ref_text:
+                if sovits.makes_mel:
+                    raise ValueError(f"{voice.label} 是 {sovits.version} 模型，参考音频必须有台词（这个版本没有无参考文本模式）。")
                 return _Reference(None, [], None, spec, sv_emb)
             prompt = self._prompt_semantic(sovits, voice.ref_wav)
             phones, bert = text_frontend.get_phones_and_bert(
                 text_frontend.ensure_sentence_end(voice.ref_text, voice.ref_lang), voice.ref_lang, self
             )
-            return _Reference(prompt, phones, bert, spec, sv_emb)
+            mel = self._reference_mel(sovits, voice.ref_wav) if sovits.makes_mel else None
+            return _Reference(prompt, phones, bert, spec, sv_emb, mel)
 
         return self._refs.get_or_create(key, build)
 
@@ -342,16 +376,52 @@ class Engine:
         devices = [self.device] if self.device.type == "cuda" else []
         with torch.random.fork_rng(devices=devices):  # decode adds noise; keep it per-line and leave global RNG alone
             torch.manual_seed(line.seed)
-            audio = sovits.model.decode(
-                tokens.to(self.device).view(1, 1, -1),
-                torch.LongTensor(phones).unsqueeze(0).to(self.device),
-                [ref.spec],
-                speed=float(params.speed),
-                sv_emb=[ref.sv_emb] if sovits.is_v2pro else None,
-            )[0][0]
+            if sovits.makes_mel:
+                audio = self._decode_mel(sovits, ref, tokens, phones, float(params.speed))
+            else:
+                audio = sovits.model.decode(
+                    tokens.to(self.device).view(1, 1, -1),
+                    torch.LongTensor(phones).unsqueeze(0).to(self.device),
+                    [ref.spec],
+                    speed=float(params.speed),
+                    sv_emb=[ref.sv_emb] if sovits.is_v2pro else None,
+                )[0][0]
         audio = audio.float().cpu().numpy()
         peak = float(np.abs(audio).max()) if audio.size else 0.0
         return audio / peak if peak > 1 else audio
+
+    def _decode_mel(self, sovits: SoVITSModel, ref: _Reference, tokens: torch.Tensor, phones: List[int],
+                    speed: float) -> torch.Tensor:
+        """v3 / v4 / v5: features of reference + line, mel by diffusion in chunks that each continue from
+        the end of the previous one, then the vocoder (the v3 / v4 / v5 branch of ``get_tts_wav``)."""
+        from ..vendor.gpt_sovits.module.models_v5 import synthesize_v5_mel
+
+        model, version = sovits.model, sovits.version
+        fea_ref, ge = model.decode_encp(ref.prompt.view(1, 1, -1), torch.LongTensor(ref.phones).unsqueeze(0).to(self.device), ref.spec)
+        n = min(ref.mel.shape[2], fea_ref.shape[2])
+        mel_ref, fea_ref = ref.mel[:, :, :n], fea_ref[:, :, :n]
+        fea_todo, _ = model.decode_encp(
+            tokens.to(self.device).view(1, 1, -1), torch.LongTensor(phones).unsqueeze(0).to(self.device), ref.spec, ge, speed
+        )
+        steps = MEL_STEPS[version]
+        if version in ("v5dev", "v5turbo"):
+            mel = synthesize_v5_mel(model, fea_ref, fea_todo, mel_ref, steps, MEL_CFG.get(version, 0.0)).to(fea_todo.dtype)
+        else:
+            t_ref, t_chunk = MEL_CHUNK.get(version, (500, 1000))
+            if n > t_ref:
+                mel_ref, fea_ref, n = mel_ref[:, :, -t_ref:], fea_ref[:, :, -t_ref:], t_ref
+            chunk = t_chunk - n
+            pieces = []
+            for start in range(0, fea_todo.shape[-1], chunk):
+                todo = fea_todo[:, :, start:start + chunk]
+                fea = torch.cat([fea_ref, todo], 2).transpose(2, 1)
+                out = model.cfm.inference(fea, torch.LongTensor([fea.size(1)]).to(self.device), mel_ref, steps,
+                                          inference_cfg_rate=0)[:, :, mel_ref.shape[2]:]
+                mel_ref, fea_ref = out[:, :, -n:], todo[:, :, -n:]
+                pieces.append(out)
+            mel = torch.cat(pieces, 2)
+        mel = (mel + 1) / 2 * (SPEC_MAX - SPEC_MIN) + SPEC_MIN
+        return self.vocoder(version)(mel)[0][0]
 
     def synthesize(
         self, plan: Plan, params: SynthesisParams, progress: Optional[Callable[[int, int], None]] = None
@@ -391,7 +461,7 @@ class Engine:
             for i in need_audio:
                 token_key, audio_key = keys[i]
                 if audio_key not in audio:  # the same line can appear twice with one key only if identical
-                    sr = self.sovits(lines[i].voice.sovits_path).sampling_rate
+                    sr = self.sovits(lines[i].voice.sovits_path).output_rate
                     audio[audio_key] = (self._decode_audio(lines[i], tokens[token_key], params), sr)
                     self._audio.put(audio_key, audio[audio_key])
                 tick()
@@ -404,7 +474,7 @@ class Engine:
         """Lines joined by the default pause; a [pause] tag replaces the default pause at that point.
         Each line is levelled on its own (cached audio stays as the model made it), so takes and
         sentences do not jump in volume."""
-        sr = clips[0][1]
+        sr = max(clip_sr for _, clip_sr in clips)  # mixed versions (32 / 24 / 48 kHz) keep the best rate
         pieces: List[np.ndarray] = []
         gap: Optional[float] = None
         n = 0

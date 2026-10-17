@@ -29,7 +29,7 @@ def pkg(fresh):  # noqa: F811
     (root / "SoVITS_weights_v2").mkdir()
     (root / "GPT_weights_v2" / "ALuoNa-e15.ckpt").write_bytes(b"PK" + b"\0" * 100)
     (root / "SoVITS_weights_v2" / "ALuoNa_e16_s224.pth").write_bytes(b"01" + b"\0" * 100)
-    (root / "SoVITS_weights_v2" / "New_e8_s80.pth").write_bytes(b"04" + b"\0" * 100)  # v4: unsupported
+    (root / "SoVITS_weights_v2" / "New_e8_s80.pth").write_bytes(b"04" + b"\0" * 100)  # v4 LoRA
     wav(root / "ref" / "Talk_3.wav", 4)
     wav(root / "ref" / "Happy.wav", 5)
     wav(root / "ref" / "short.wav", 1)
@@ -67,17 +67,22 @@ def test_chunked_upload_checks_offsets_and_size(lib, pkg):
 
 
 def test_inspect_suggests_name_reference_and_text(lib, pkg):
-    files = [upload(pkg / "GPT_weights_v2" / "ALuoNa-e15.ckpt"), upload(pkg / "SoVITS_weights_v2" / "ALuoNa_e16_s224.pth"),
+    (pkg / "SoVITS_weights_v2" / "Odd_e1_s1.pth").write_bytes(b"99" + b"\0" * 100)  # no GPT-SoVITS version
+    files = [upload(pkg / "SoVITS_weights_v2" / "Odd_e1_s1.pth"), upload(pkg / "GPT_weights_v2" / "ALuoNa-e15.ckpt"), upload(pkg / "SoVITS_weights_v2" / "ALuoNa_e16_s224.pth"),
              upload(pkg / "ref" / "Talk_3.wav"), upload(pkg / "ref" / "Happy.wav"), upload(pkg / "ref" / "Happy.txt"),
              upload(pkg / "ref" / "all.list"), upload(pkg / "ref" / "short.wav"), upload(pkg / "SoVITS_weights_v2" / "New_e8_s80.pth")]
     out = importer.inspect(files)
     by_name = {f["name"]: f for f in out["files"]}
-    assert out["suggested"] == {"name": "ALuoNa", "language": "ja", "reference": 2}
+    assert out["suggested"] == {"name": "ALuoNa", "language": "ja", "reference": 3}
     assert by_name["ALuoNa_e16_s224.pth"]["version"] == "v2" and by_name["ALuoNa_e16_s224.pth"]["supported"]
-    assert by_name["New_e8_s80.pth"]["supported"] is False
+    assert by_name["ALuoNa_e16_s224.pth"]["needs"] == []
+    new = by_name["New_e8_s80.pth"]
+    assert (new["version"], new["supported"], new["needs"]) == ("v4", True, ["v4"])  # base model + vocoder
+    assert by_name["Odd_e1_s1.pth"]["supported"] is False
     assert (by_name["Talk_3.wav"]["text"], by_name["Talk_3.wav"]["text_source"]) == ("通常授業！", "list")
     assert (by_name["Happy.wav"]["text"], by_name["Happy.wav"]["text_source"]) == ("やった！", "txt")
-    assert not any("short.wav" in p for p in out["problems"]) and any("v4" in p for p in out["problems"])
+    assert not any("short.wav" in p for p in out["problems"]) and not any("v4" in p for p in out["problems"])
+    assert any("Odd_e1_s1.pth" in p for p in out["problems"])
     assert next(f for f in out["files"] if f["name"] == "short.wav")["seconds"] < 3  # the UI leaves it out
 
 

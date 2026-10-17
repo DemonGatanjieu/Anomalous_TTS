@@ -51,9 +51,39 @@ G2PW_REVISION = "827f4a519b083e3f37c790c938300241e75692d5"
 G2PW_URL = f"https://www.modelscope.cn/models/kamiorinn/g2pw/resolve/{G2PW_REVISION}/G2PWModel_1.1.zip"
 G2PW_SHA256 = "b116f6930a7ee55eef6576a8d8e14bf40c1106583439e8ae924b901512379c64"
 SV_FILE = "pretrained_eres2netv2w24s4ep4.ckpt"
+# What v3 / v4 / v5 models need besides the shared files: the official pretrained SoVITS model of the
+# version (a fine-tuned file is a LoRA on it) and the vocoder that turns the mel spectrogram into audio.
+# Downloaded from one revision of lj1995/GPT-SoVITS; each file's SHA-256 is checked before it is used.
+# Folder "" = the pretrained folder itself, where GPT-SoVITS keeps s2Gv3.pth.
+HF_REVISION = "8f8857563c040d542de108a2c18b0425abd6c9c5"
+BIGVGAN_NAME = "models--nvidia--bigvgan_v2_24khz_100band_256x"
+PINNED: Dict[str, Tuple[str, Dict[str, str]]] = {
+    "v3": ("", {"s2Gv3.pth": "f33abb1920076d988e1711d5f41b5c9c6d7f92575b4acf0ad4fae6a4ebf0cf19"}),
+    "bigvgan": (BIGVGAN_NAME, {
+        "config.json": "d77e2c96583ca2296ac112a56ec7cc6bd5da4bf7681ceff18448bedc4fcf6512",
+        "bigvgan_generator.pt": "6f9c5715550c9d0f11159ceb8935638da5aeb19e27d1e63677632df095e376f5",
+    }),
+    "v4": ("gsv-v4-pretrained", {
+        "s2Gv4.pth": "906fe22f48c3e037a389df291d4d32a9414e15dbb8f9628643e83aaced109ea4",
+        "vocoder.pth": "4d611913df7b12d49e8976c944558d2d096816365edfc6c35a9e85b67dd14ed9",
+    }),
+    "v5dev": ("gsv-v5-pretrained", {
+        "s2Gv5dev.pth": "16c11fc588a9229a479316a11fc0f518087e79773f5271666a90b39d50460407",
+        "vocoder.pth": "b7543c83222aa2105bb4efb56845086bc5f2eeba61243d723ffa062052b3221f",
+    }),
+    "v5turbo": ("gsv-v5-pretrained", {
+        "s2Gv5turbo.pth": "287b32a06b7d486f5303ec520468b0728fb01aac8b0f5d86fd5455c9a1d3e022",
+        "vocoder.pth": "b7543c83222aa2105bb4efb56845086bc5f2eeba61243d723ffa062052b3221f",
+    }),
+}
+# Model version -> (pinned item, file) of its official SoVITS model and of its vocoder.
+SOVITS_PRETRAINED = {"v3": ("v3", "s2Gv3.pth"), "v4": ("v4", "s2Gv4.pth"),
+                     "v5dev": ("v5dev", "s2Gv5dev.pth"), "v5turbo": ("v5turbo", "s2Gv5turbo.pth")}
+VOCODERS = {"v3": ("bigvgan", ""), "v4": ("v4", "vocoder.pth"),
+            "v5dev": ("v5dev", "vocoder.pth"), "v5turbo": ("v5turbo", "vocoder.pth")}
 
 # Pinned to the GPT-SoVITS commit our vendored code comes from (see UPSTREAM.md).
-GSV_COMMIT = "48b1a0169a28582a8984402f82cf438d3bfa6aca"
+GSV_COMMIT = "1b47ca07ef43a284e0b8bd7f29d3e1e3ff76082a"
 JA_USERDICT_URL = (
     f"https://raw.githubusercontent.com/RVC-Boss/GPT-SoVITS/{GSV_COMMIT}/GPT_SoVITS/text/ja_userdic/userdict.csv"
 )
@@ -244,6 +274,59 @@ def _hf_pretrained(name: str, files: tuple) -> str:
         return os.path.join(target, name)
 
 
+def _pinned(item_id: str) -> str:
+    """Folder of a PINNED item, downloading its missing files (SHA-256 checked) on first use."""
+    folder, files = PINNED[item_id]
+    with _lock:
+        found = find_pretrained(folder, tuple(files))
+        if found:
+            return found
+        target = _download_target()
+        dest = os.path.join(target, folder)
+        log.info("[Anomalous_TTS] 下载 %s 到 %s ...", item_id, dest)
+        from huggingface_hub import hf_hub_download
+
+        for name, sha256 in files.items():
+            path = os.path.join(dest, name)
+            if os.path.isfile(path):
+                continue
+            remote = f"{folder}/{name}" if folder else name
+            try:
+                hf_hub_download(HF_REPO, remote, revision=HF_REVISION, local_dir=target)
+            except Exception as e:  # network, proxy
+                raise RuntimeError(
+                    f"无法下载 {remote}（{e}）。可以手动从 https://huggingface.co/{HF_REPO}/tree/main 下载，"
+                    f"放到 {dest}；或者在 {app_config.path()} 的 pretrained 里写上已有的 GPT-SoVITS 整合包。"
+                ) from e
+            digest = _sha256(path)
+            if digest != sha256:
+                os.remove(path)
+                raise RuntimeError(f"下载的 {remote} 不是应有的文件（SHA-256 {digest}），已删除。")
+        return dest
+
+
+def pretrained_for(version: str, lora: bool) -> List[str]:
+    """Ids of the PRETRAINED items a SoVITS model of ``version`` needs besides the shared ones."""
+    ids = ["sv"] if version in ("v2Pro", "v2ProPlus") else []
+    if version in VOCODERS:
+        if lora:
+            ids.append(SOVITS_PRETRAINED[version][0])
+        ids.append(VOCODERS[version][0])
+    return list(dict.fromkeys(ids))
+
+
+def sovits_pretrained(version: str) -> str:
+    """The official pretrained SoVITS model a v3 / v4 / v5 LoRA file is merged into."""
+    item_id, name = SOVITS_PRETRAINED[version]
+    return os.path.join(_pinned(item_id), name)
+
+
+def vocoder(version: str) -> str:
+    """Vocoder of a v3 / v4 / v5 model: the BigVGAN folder for v3, a ``vocoder.pth`` otherwise."""
+    item_id, name = VOCODERS[version]
+    return os.path.join(_pinned(item_id), name) if name else _pinned(item_id)
+
+
 def hubert_dir() -> str:
     return _hf_pretrained(HUBERT_NAME, HUBERT_FILES)
 
@@ -350,6 +433,8 @@ class ComfyResources:
     g2pw_dir = staticmethod(g2pw_dir)
     sv_path = staticmethod(sv_path)
     english_dirs = staticmethod(english_dirs)
+    sovits_pretrained = staticmethod(sovits_pretrained)
+    vocoder = staticmethod(vocoder)
 
 
 _ja_userdict_state = {"done": False}
@@ -381,7 +466,7 @@ def ensure_ja_userdict() -> None:
 class Pretrained:
     id: str
     label: str
-    needed_for: str  # "all", "zh", "en", "ja" or "v2pro"
+    needed_for: str  # "all", "zh", "en", "ja", "v2pro", or the model version: "v3", "v4", "v5dev", "v5turbo"
     size: int  # approximate download size in bytes, for the progress bar
     required: bool  # False: the node works without it, with lower quality
 
@@ -393,6 +478,11 @@ PRETRAINED = (
     Pretrained("sv", "sv (ERes2NetV2)", "v2pro", 105_000_000, True),
     Pretrained("english", "英语词典 + nltk 数据", "en", 30_000_000, True),
     Pretrained("ja_userdic", "日语用户词典", "ja", 17_000_000, False),
+    Pretrained("v3", "v3 底模 (s2Gv3)", "v3", 769_000_000, True),
+    Pretrained("bigvgan", "v3 声码器 (BigVGAN)", "v3", 450_000_000, True),
+    Pretrained("v4", "v4 底模 + 声码器", "v4", 827_000_000, True),
+    Pretrained("v5dev", "v5dev 底模 + 声码器", "v5dev", 824_000_000, True),
+    Pretrained("v5turbo", "v5turbo 底模 + 声码器", "v5turbo", 824_000_000, True),
 )
 PRETRAINED_IDS = tuple(p.id for p in PRETRAINED)
 
@@ -412,6 +502,9 @@ def locate(item_id: str, dirs: Optional[List[str]] = None) -> Optional[str]:
         return found if dirs is not None or not _nltk_missing() else None
     if item_id == "ja_userdic":
         return find_pretrained("ja_userdic", ("userdict.csv",), dirs)
+    if item_id in PINNED:
+        folder, files = PINNED[item_id]
+        return find_pretrained(folder, tuple(files), dirs)
     raise ValueError(f"未知的底模：{item_id}")
 
 
@@ -432,6 +525,8 @@ def fetch(item_id: str) -> None:
     elif item_id == "ja_userdic":
         with _lock:
             _ja_userdic_dir(download=True)
+    elif item_id in PINNED:
+        _pinned(item_id)
     else:
         raise ValueError(f"未知的底模：{item_id}")
 
@@ -447,6 +542,9 @@ def download_paths(item_id: str) -> List[str]:
         return [os.path.join(target, "G2PWModel_1.1.zip.part"), os.path.join(target, "G2PWModel_1.1"), os.path.join(target, G2PW_NAME)]
     if item_id == "english":
         return [os.path.join(target, "en_dict"), os.path.join(target, "nltk_data")]
+    if item_id in PINNED:
+        folder, files = PINNED[item_id]
+        return [os.path.join(target, folder, f) for f in files] + [os.path.join(hf_partial, folder) if folder else hf_partial]
     return [os.path.join(target, "ja_userdic")]
 
 

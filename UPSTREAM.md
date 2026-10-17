@@ -5,7 +5,7 @@
 ## GPT-SoVITS（`vendor/gpt_sovits/`）
 
 - 仓库：https://github.com/RVC-Boss/GPT-SoVITS
-- 固定版本：`48b1a0169a28582a8984402f82cf438d3bfa6aca`（2026-08-18）
+- 固定版本：`1b47ca07ef43a284e0b8bd7f29d3e1e3ff76082a`（2026-10-09，含 V5）
 - 许可证：`vendor/gpt_sovits/LICENSE`
 - 同步：`python tools/sync_upstream.py <GPT-SoVITS 源码目录>`，脚本会复制下列文件并重新打补丁。任何一个补丁对不上都会停下，需要人工检查。
 
@@ -19,16 +19,20 @@
 | `text/english.py`、`text/en_normalization/expend.py` | 英语前端（CMU 词典首次使用时从同一版本的 GitHub 下载，不放进仓库） |
 | `text/namedict.rep`（脚本生成） | 英语人名读音：上游只有 `namedict_cache.pickle`，同步脚本从固定版本里把它转成文本 |
 | `eres2net/`（4 个文件） | v2Pro / v2ProPlus 的说话人识别模型结构 |
+| `module/models_v5.py` | v5 的扩散（`CFMV5`）和分块生成频谱（`synthesize_v5_mel`） |
+| `f5_tts/model/`（`modules.py`、`backbones/dit.py`） | v3 / v4 / v5 把 SoVITS 特征变成频谱的 DiT（F5-TTS，MIT） |
+| `f5_tts/model/rotary.py`（脚本生成） | DiT 用的旋转位置编码，x-transformers（MIT）里的两个函数，照原样写出，不用装这个包 |
+| `BigVGAN/`（含 `alias_free_activation/torch/`、`incl_licenses/`） | v3 的声码器（NVIDIA BigVGAN，MIT，许可证在 `BigVGAN/LICENSE`） |
 
-没有复制：训练代码、WebUI、`TTS_infer_pack`（官方推理主流程，由 `core/engine.py` 替代）、v3/v4 的 BigVGAN 和 CFM、UVR5、ASR、`sv.py`（由 `core/engine.py` 的 `sv()` 替代）、`LangSegmenter`（中英混合改用正则切分）。
+没有复制：训练代码、WebUI、`TTS_infer_pack`（官方推理主流程，由 `core/engine.py` 替代）、`Accel/` 和 `module/v5_inference.py`（CUDA Graph / Flash Attention 加速分支）、BigVGAN 的 CUDA 算子、UVR5、ASR、`sv.py`（由 `core/engine.py` 的 `sv()` 替代）、`LangSegmenter`（中英混合改用正则切分）。
 
 ### 补丁（见 `tools/sync_upstream.py`）
 
 1. 所有 `from AR...`、`from module...`、`from text...` 改成包内相对 import。上游靠修改 `sys.path` 找模块，放进 ComfyUI 会和其他节点冲突。
-2. `module/models.py`：删掉 `from f5_tts.model import DiT`（只有 v3/v4 用）。
+2. `module/models.py`、`module/models_v5.py`、`f5_tts/`：上游的 `GPT_SoVITS.f5_tts...` 和 `module...` 也改成相对 import。
 3. `AR/models/t2s_model.py`：删掉训练用的 `torchmetrics` 精度统计。
 4. `module/core_vq.py`：分布式训练的三个工具函数换成空实现，推理用不到。
-5. `module/mel_processing.py`：librosa 改为用到时才导入（推理只用 `spectrogram_torch`，不需要 librosa）。
+5. `module/mel_processing.py`：librosa 的梅尔滤波器换成 torchaudio 算的同一组（Slaney 刻度和归一化，librosa 的默认），不需要装 librosa。和 librosa 逐项比，差不到 1e-6（`tests/test_versions.py`）。
 6. `text/chinese2.py`：
    - 删掉没用到的 `cn2an`。
    - g2pW 不在导入时加载（上游写死了相对路径并会自动下载），改由 `enable_g2pw(模型目录, 分词器目录)` 按需加载；加载前走上游自带的 pypinyin 分支。`disable_g2pw()` 再把它放掉（约 600 MB 内存），引擎卸载模型时调用。
@@ -47,11 +51,16 @@
     - `text/english.py`：CMU 词典每次从 `.rep` 文本建（约 0.25 秒），不再读写 `engdict_cache.pickle`；人名读音读 `namedict.rep`。
     结果和原来完全一样：多音字 45047 条、人名 19929 条、CMU 词典 143205 条逐条相同，g2pW 的设置项相同，三种语言的音素基准测试不变。旧版本留在 `en_dict` 里的 `engdict_cache.pickle`、`namedict_cache.pickle` 不再读。
 
+12. `BigVGAN/bigvgan.py`：去掉 `huggingface_hub` 的下载和保存（`PyTorchModelHubMixin`、`_from_pretrained`、`_save_pretrained`）。`core/models.py` 从本地文件夹建它：`config.json` 当 JSON 读，权重用 `weights_only=True`。
+13. `f5_tts/model/`：`x_transformers` 换成脚本写出的 `rotary.py`。和 x-transformers 2.28 比，结果逐位相同（`tests/test_versions.py`）。
+
 `core/t2s_batch.py` 是批量 GPT 解码，改写自 `t2s_model.py` 的 `infer_panel_batch_infer` 和 `infer_panel_naive`：每句用自己的随机数生成器（结果只取决于这一句的种子，和同批的其他句子无关），支持无参考文本，停止规则同 `infer_panel_naive`。测试确认：单句时与官方 `infer_panel_naive` 生成的 token 完全相同；多句批量与逐句结果完全相同（CPU、fp32）。唯一不同：到 54 秒上限被强制截断时，官方会丢掉第一个 token，这里保留。
 
 `core/engine.py` 的推理流程照 `inference_webui.py` 的 `get_tts_wav` 重写，保留了上游的行为细节：参考音频限 3~10 秒、参考音频后补 0.3 秒静音、短句前补 "."、句末补标点、每句单独解码后按峰值归一化。
 
-`core/checkpoints.py` 的版本判断照 `process_ckpt.py`。不同之处：用 `torch.load(weights_only=True)` 加载，把权重里的 `utils.HParams` 映射到本地的空类，避免执行网上下载的模型里的任意代码。
+`core/checkpoints.py` 的版本判断照 `process_ckpt.py`（文件头 `00`~`08`、官方底模的哈希）。不同之处：用 `torch.load(weights_only=True)` 加载，把权重里的 `utils.HParams` 映射到本地的空类，避免执行网上下载的模型里的任意代码。v3 / v4 / v5 训练出来的是 LoRA，上游用 peft 合并（`merge_and_unload`）；这里直接算 `W + B @ A`（训练时 `lora_alpha` 等于秩，系数是 1），不需要装 peft。
+
+`core/engine.py` 的 v3 / v4 / v5 分支照 `get_tts_wav` 写：参考音频的梅尔频谱（v3 24kHz，其他 32kHz）归一化，参考 + 这一句的特征按块扩散（v3 每块 934 帧、参考最多 468 帧；v4 1000 / 500；v5 用 `synthesize_v5_mel`），再交给声码器（v3 BigVGAN 24kHz，v4 / v5 48kHz）。步数和 CFG 用官方界面的默认值：v3 32 步、v4 8 步、v5dev 32 步 CFG 1.3、v5turbo 4 步。这几个版本没有无参考文本模式，参考音频必须有台词。
 
 ### 中文前端对拍结果（2026-09-24）
 
@@ -63,6 +72,13 @@ g2pW 需要 `opencc`（先把简体转成繁体再判断）。试过用 `zh_norm
 ### 英语对拍结果（2026-09-24）
 
 16 句测试句（多音词、数字、日期、金额、缩写、专有名词），本包与 GPT-SoVITS 官方 `english.py` 音素完全一致。
+
+### v3 / v4 / v5（2026-10-17）
+
+- v4：用自己训练的 v4 LoRA（日语角色）加官方 `s2Gv4.pth` 和 `vocoder.pth`，说两句中文，48kHz，用整合包的中文语音识别（paraformer）听写，和原文一字不差。
+- v3：官方 `s2Gv3.pth` 直接当模型、BigVGAN 声码器，同样两句，24kHz，听写一字不差。
+- v5：还没拿 v5 的权重试过。把 v4 的权重装进 v5 的结构（`CFMV5`、无步长嵌入）跑通了 v5dev（CFG）和 v5turbo，包括超过一块的长句。
+- 同样的输入再生成一次，和第一次逐位相同（缓存）。
 
 ### v2Pro / v2ProPlus
 

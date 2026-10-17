@@ -1,10 +1,15 @@
 import torch
 import torch.utils.data
-# Anomalous_TTS: librosa imported lazily; only mel_spectrogram needs it.
-def librosa_mel_fn(*args, **kwargs):
-    from librosa.filters import mel
+import torchaudio.functional
 
-    return mel(*args, **kwargs)
+
+# Anomalous_TTS: librosa's mel filters (its defaults: Slaney scale and norm) from torchaudio, so
+# librosa is not a dependency (tests/test_versions.py compares the two).
+def librosa_mel_fn(sr, n_fft, n_mels, fmin, fmax):
+    fbanks = torchaudio.functional.melscale_fbanks(
+        n_fft // 2 + 1, float(fmin), float(sr / 2 if fmax is None else fmax), n_mels, sr, norm="slaney", mel_scale="slaney"
+    )
+    return fbanks.T.contiguous().numpy()
 
 MAX_WAV_VALUE = 32768.0
 
