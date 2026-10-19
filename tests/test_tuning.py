@@ -95,6 +95,23 @@ def test_one_preset_for_every_line():
     assert tuning.Tuner(config, preset="custom_gone").chosen == ""
 
 
+def test_a_line_of_its_own_goes_over_everything(tmp_path):
+    root = tmp_path / "gpt_sovits"
+    make_char(root, "阿罗娜", "JA", {"language": "ja", "defaults": {"speed": 1.2, "preset": "stable"}})
+    make_char(root, "普拉娜", "JA")
+    chars = characters.discover([str(root)])
+    tuner = tuning.Tuner({"presets": {"custom_a1": NARRATION}}, {"top_k": 40}, preset="standard")
+    script = ("おはよう。\n[speed:0.8][preset:lively]今日は晴れ。また明日。\n"
+              "[普拉娜][lang:zh][speed:9][preset:custom_a1]早上好。\n[preset:loud][speed:x]さようなら。\n终わり。")
+    plan = planner.build_plan(chars, planner.NodeOptions("阿罗娜"), script, tuner)
+    lines = [(line.text, line.language, line.tuning.source, line.tuning.top_k, line.tuning.speed) for line in plan.lines]
+    assert lines[0] == ("おはよう。", "ja", "node", 40, 1.2)
+    assert lines[1][2:] == ("line", 30, 0.8) and lines[2][2:] == ("line", 30, 0.8)  # every sentence of that line
+    assert lines[3] == ("早上好。", "zh", "line", 12, 2.0)  # language as written, speed kept in range
+    assert lines[4][2:] == ("node", 40, 1.0) and lines[5][2] == "node"  # unusable values: left out, the line after is plain
+    assert any("loud" in w for w in plan.warnings) and any("[speed:x]" in w for w in plan.warnings)
+
+
 def test_presets_route_saves_only_valid_files(tmp_path, monkeypatch):
     monkeypatch.setattr(tuning, "path", lambda: str(tmp_path / tuning.FILENAME))
     with pytest.raises(server.web.HTTPBadRequest):

@@ -13,7 +13,7 @@ from .core import app_config, characters, checkpoints, dependencies, downloads, 
 
 log = logging.getLogger("Anomalous_TTS")
 
-API_FORMAT = 16
+API_FORMAT = 17
 LOCAL_ADDRESSES = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 
 

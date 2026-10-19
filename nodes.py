@@ -108,7 +108,8 @@ def _hook_free_memory() -> None:
 _hook_free_memory()
 
 
-TUNING_NAMES = {"stable": "稳定", "standard": "标准", "lively": "有起伏", "character": "角色特调", "node": "节点上改的值"}
+TUNING_NAMES = {"stable": "稳定", "standard": "标准", "lively": "有起伏", "character": "角色特调", "node": "节点上改的值",
+                "line": "单句设置"}
 
 
 def tuning_summary(lines, tuner: tuning.Tuner) -> str:

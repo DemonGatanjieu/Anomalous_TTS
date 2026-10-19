@@ -1,6 +1,6 @@
 # Anomalous_TTS ↔ Anomalous Model Browser 接口约定
 
-版本：16（2026-10-17）
+版本：17（2026-10-20）
 
 两个项目在不同的对话里开发。这份文档是双方唯一的约定：**Anomalous 只依赖这里写的东西**，其余都是 Anomalous_TTS 的内部实现，可以随时改。
 
@@ -92,6 +92,7 @@ Anomalous 推送剧本时只需要设置两个输入：
 | `[角色]` | 之后改由这个角色说（名字或别名）。情绪回到 `main`。找不到的角色：控制台警告，继续用当前角色 |
 | `[pause:1.5]`、`[pause:500ms]`、`[停顿:1s]` | 插入停顿 |
 | `[take:2]`、`[版本:2]` | 紧跟着的文字（到换行或下一个标签为止）换第 2 版：只有这段的随机数变，其他句子不变、可以直接用缓存。写在情绪标签之后，例如 `{开心}[take:2]好的。`；`[take:1]` 和不写一样 |
+| `[speed:1.2]`、`[preset:lively]`、`[lang:ja]`（也可写 `语速` / `预设` / `语言`） | 单句设置：紧跟着的文字（范围和 `[take]` 一样）用这个语速（0.5~2，超出的取边界）、这一档预设的四个采样参数（内置三档或 `custom_…`）、这种语言（`ja` / `zh` / `en`）。盖住其他所有设置，包括节点输入（见 5.4 第 7 层）。写在角色、情绪标签之后，几个可以连着写，和 `[take]` 不分先后，例如 `[普拉娜]{开心}[speed:0.9][preset:stable]好的。`。值不能用时这一项不算，`info` 里提示一句 |
 
 - 第一个 `[角色]` 之前的文字由节点上选的 `character` 说。
 - `[名字]` 同时匹配到多个角色版本时（比如 `阿罗娜` 对应日配、中配两个），选 `language` 和这句话语言一致的那个；还分不出来就报错，并列出候选。
@@ -311,7 +312,8 @@ ComfyUI 默认每个请求最大 100MB，权重常常更大，所以分块上传
 3. 这句话的语言和参考音频的语言不同时：这对语言的规则（`languages["ja>zh"]`），没有就用 `cross`（默认 `stable`）。节点的 `cross_lingual` 选 `off` 时没有这一层；
 4. 角色的 `defaults.by_language[这句话的语言]`；
 5. 节点的 `preset` 输入填了档名（内置的或 `custom_…`）时：每句的四个采样参数都用这一档，语速照旧。预设文件里没有这一档时不算，`info` 里提示一句；
-6. 节点上**改过**的输入（`speed`、`top_k`、`top_p`、`temperature`、`repetition_penalty` 不等于节点自己的默认值，也不等于这个角色 `defaults` 里的值）。
+6. 节点上**改过**的输入（`speed`、`top_k`、`top_p`、`temperature`、`repetition_penalty` 不等于节点自己的默认值，也不等于这个角色 `defaults` 里的值）；
+7. 剧本里这一句自己的 `[preset:…]`（四个采样参数）和 `[speed:…]`（见第 4 节）。`info` 里记作“单句设置”。
 
 三档内置预设（`repetition_penalty` 都是 1.35，`top_p` 都是 1）：
 
@@ -361,6 +363,7 @@ window.anomalous_open_voice(character)  // → true：已打开浏览器的“�
 
 ## 变更记录
 
+- 17（2026-10-20）：剧本语法加单句设置 `[speed:…]`、`[preset:…]`、`[lang:…]`（第 4 节，5.4 第 7 层）：多角色配音里每个角色、每一句可以各用各的语速、预设和语言，节点输入不再需要代表整段。不写时结果和 16 一样。`format` 改为 17。
 - 1（2026-09-24）：初版。
 - 2（2026-09-25）：`/anomalous_tts/characters` 列表只返回摘要（去掉 `gpt` / `sovits` / `audio`，加 `counts`），文件列表改由 `?name=` 取单个角色；加 `?refresh=1`；`format` 改为 2。文件名里只是扩展名的部分（`X.ogg.wav`）不再当作情绪。节点的 `reference_audio` 改为文本框（相对路径）。
 - 3（2026-09-25）：加第 5.2 节（`status`、`libraries`、`pretrained/source`、`pretrained/download`、`browse`）和第 5.3 节（`import/upload`、`import/discard`、`import/inspect`、`import/commit`）；角色库可以在界面里添加；`POST /settings` 只接受本机请求；`format` 改为 3。

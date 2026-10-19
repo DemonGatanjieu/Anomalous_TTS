@@ -32,3 +32,12 @@ def test_take_tags():
     assert tokenize("{开心}[take:3]好的。") == [Emotion("开心"), Take(3), Text("好的。")]
     assert tokenize("[版本：2]好的。") == [Take(2), Text("好的。")]
     assert tokenize("[take:0]好的。")[0] == Take(1)
+
+
+def test_line_setting_tags():
+    from Anomalous_TTS.core.script import LineSetting, Take
+    assert tokenize("{开心}[lang:ja][speed:1.2][preset:lively][take:2]好的。") == [
+        Emotion("开心"), LineSetting("language", "ja"), LineSetting("speed", "1.2"), LineSetting("preset", "lively"),
+        Take(2), Text("好的。")]
+    assert tokenize("[语速：0.9][预设:custom_a1]好的。")[:2] == [LineSetting("speed", "0.9"), LineSetting("preset", "custom_a1")]
+    assert tokenize("[speed fast]") == [Speaker("speed fast")]

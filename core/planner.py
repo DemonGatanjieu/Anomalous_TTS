@@ -17,6 +17,9 @@ from . import langdetect, script
 from .characters import AUTO, MAIN, Character, Reference, resolve_name
 from .tuning import Tuner, Tuning
 
+MIN_SPEED, MAX_SPEED = 0.5, 2.0  # the node's speed input
+LANGUAGES = {"ja": "ja", "jp": "ja", "zh": "zh", "cn": "zh", "en": "en", "日语": "ja", "中文": "zh", "英语": "en"}
+
 
 @dataclass(frozen=True)
 class Voice:
@@ -97,6 +100,7 @@ class _Builder:
         self.pending_speaker: Optional[str] = None
         self.last_lang: Optional[str] = None
         self.take = 1  # [take:N] until the end of its line or the next tag
+        self.line: Dict[str, object] = {}  # [speed:…] [preset:…] [lang:…], the same span as a take
 
     def warn(self, message: str) -> None:
         if message not in self.plan.warnings:
@@ -145,6 +149,8 @@ class _Builder:
 
     # ----- tokens -----
     def language_of(self, text: str) -> str:
+        if self.line.get("language"):
+            return self.line["language"]
         if self.opts.language != AUTO:
             return self.opts.language
         model_lang = self.speaker.language
@@ -155,7 +161,9 @@ class _Builder:
         if self.pending_speaker is None:
             return
         tag, self.pending_speaker = self.pending_speaker, None
-        if self.opts.language != AUTO:
+        if self.line.get("language"):
+            lang = self.line["language"]
+        elif self.opts.language != AUTO:
             lang = self.opts.language
         else:
             lang = langdetect.detect(next_text) if next_text else None
@@ -166,12 +174,33 @@ class _Builder:
             return
         self.emotion = MAIN
 
+    def setting(self, token: script.LineSetting) -> None:
+        """A line's own speed, preset or language; a value it cannot use is left out with a warning."""
+        value = token.value.strip()
+        if token.name == "speed":
+            try:
+                self.line["speed"] = min(MAX_SPEED, max(MIN_SPEED, float(value)))
+            except ValueError:
+                self.warn(f"[speed:{value}] 不是数字，这句按原来的语速。")
+        elif token.name == "preset":
+            if value in self.tuner.names:
+                self.line["preset"] = value
+            else:
+                self.warn(f"没有叫 {value} 的预设，这句按生成设置走。")
+        else:
+            code = LANGUAGES.get(value.lower())
+            if code:
+                self.line["language"] = code
+            else:
+                self.warn(f"[lang:{value}] 只能是 ja / zh / en，这句自动判断语言。")
+
     def text(self, text: str) -> None:
-        if self.take > 1:
+        if self.take > 1 or self.line:
             text = text.lstrip("\n")
             head, _, rest = text.partition("\n")
             self.sentences(head)
             self.take = 1
+            self.line = {}
             if rest.strip():
                 self.sentences(rest)
             return
@@ -187,17 +216,21 @@ class _Builder:
             occurrence = self.counts[key]
             self.counts[key] += 1
             seed = line_seed(self.opts.seed, self.speaker.name, self.emotion, sentence, occurrence, self.take)
-            tuning = self.tuner.for_line(self.speaker.settings.get("defaults"), voice.ref_lang, lang)
+            own = {k: v for k, v in self.line.items() if k != "language"}
+            tuning = self.tuner.for_line(self.speaker.settings.get("defaults"), voice.ref_lang, lang, own)
             self.plan.items.append(Line(voice, sentence, lang, seed, tuning))
 
     def build(self, text: str) -> Plan:
         for token in script.tokenize(text):
-            if not isinstance(token, (script.Text, script.Take)):
-                self.take = 1  # a take covers only the text right after it
+            if not isinstance(token, (script.Text, script.Take, script.LineSetting)):
+                self.take = 1  # a take and a line's settings cover only the text right after them
+                self.line = {}
             if isinstance(token, script.Text):
                 self.text(token.text)
             elif isinstance(token, script.Take):
                 self.take = token.number
+            elif isinstance(token, script.LineSetting):
+                self.setting(token)
             elif isinstance(token, script.Emotion):
                 self.resolve_pending_speaker(None)
                 self.emotion = token.name

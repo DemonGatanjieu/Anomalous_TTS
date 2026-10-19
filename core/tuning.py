@@ -10,7 +10,8 @@ From lowest to highest priority:
 4. the character's ``defaults.by_language`` entry for the line's language;
 5. the node's ``preset`` input: every line's sampling numbers from that preset (speed stays);
 6. node inputs changed from the node's own defaults (and not just the character's
-   ``defaults`` sent back by Anomalous).
+   ``defaults`` sent back by Anomalous);
+7. the line's own ``[preset:…]`` / ``[speed:…]`` in the script (core/script.py).
 
 The presets file is written by Anomalous (``POST /anomalous_tts/presets``, this computer
 only); it holds names and numbers, never paths.
@@ -194,7 +195,8 @@ class Tuner:
         values.update(numbers)
         return known or bool(numbers)
 
-    def for_line(self, defaults: Any, ref_lang: Optional[str], lang: str) -> Tuning:
+    def for_line(self, defaults: Any, ref_lang: Optional[str], lang: str, line: Optional[Mapping[str, Any]] = None) -> Tuning:
+        """``line``: the line's own ``preset`` (a known name) and / or ``speed`` from the script."""
         values: Dict[str, float] = {**self.preset(self.default), "speed": 1.0}
         source = self.default
         defaults = defaults if isinstance(defaults, Mapping) else {}
@@ -212,5 +214,11 @@ class Tuner:
         if self.node:
             values.update(self.node)
             source = "node"
+        if line:
+            if line.get("preset") in self.names:
+                values.update(self.preset(line["preset"]))
+            if "speed" in line:
+                values["speed"] = line["speed"]
+            source = "line"
         return Tuning(int(values["top_k"]), float(values["top_p"]), float(values["temperature"]),
                       float(values["repetition_penalty"]), float(values["speed"]), source)
