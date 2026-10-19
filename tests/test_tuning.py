@@ -112,6 +112,17 @@ def test_a_line_of_its_own_goes_over_everything(tmp_path):
     assert any("loud" in w for w in plan.warnings) and any("[speed:x]" in w for w in plan.warnings)
 
 
+def test_a_line_can_go_back_to_detecting_and_to_the_presets(tmp_path):
+    root = tmp_path / "gpt_sovits"
+    make_char(root, "阿罗娜", "JA", {"language": "ja", "defaults": {"preset": "stable"}})
+    chars = characters.discover([str(root)])
+    tuner = tuning.Tuner({}, preset="lively")
+    plan = planner.build_plan(chars, planner.NodeOptions("阿罗娜", language="zh"), "老师好。\n[lang:auto][preset:auto]おはよう。", tuner)
+    first, second = plan.lines
+    assert (first.language, first.tuning.source) == ("zh", "lively")
+    assert (second.language, second.tuning.source, second.tuning.top_k) == ("ja", "character", 10)
+
+
 def test_presets_route_saves_only_valid_files(tmp_path, monkeypatch):
     monkeypatch.setattr(tuning, "path", lambda: str(tmp_path / tuning.FILENAME))
     with pytest.raises(server.web.HTTPBadRequest):
@@ -157,7 +168,7 @@ def test_node_values_count_only_when_changed(tmp_path, monkeypatch):
     assert (first.source, first.top_k, first.speed) == ("character", 20, 1.2)
     node.generate("阿罗娜", "おはよう。", temperature=0.5)
     assert (seen["lines"][0].tuning.source, seen["lines"][0].tuning.temperature) == ("node", 0.5)
-    assert nodes.tuning_summary(seen["lines"], tuning.Tuner({})) == "生成设置：节点上改的值 1 句"
+    assert nodes.tuning_summary(seen["lines"], tuning.Tuner({})) == "语气：节点上改的值 1 句"
     node.generate("阿罗娜", "おはよう。", preset="stable")
     assert (seen["lines"][0].tuning.source, seen["lines"][0].tuning.top_k, seen["lines"][0].tuning.speed) == ("stable", 10, 1.2)
     out = node.generate("阿罗娜", "おはよう。", preset="custom_gone")

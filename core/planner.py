@@ -18,7 +18,8 @@ from .characters import AUTO, MAIN, Character, Reference, resolve_name
 from .tuning import Tuner, Tuning
 
 MIN_SPEED, MAX_SPEED = 0.5, 2.0  # the node's speed input
-LANGUAGES = {"ja": "ja", "jp": "ja", "zh": "zh", "cn": "zh", "en": "en", "日语": "ja", "中文": "zh", "英语": "en"}
+LANGUAGES = {"ja": "ja", "jp": "ja", "zh": "zh", "cn": "zh", "en": "en", "日语": "ja", "中文": "zh", "英语": "en",
+             AUTO: AUTO, "自动": AUTO}  # auto: detected for this line even when the node's language is set
 
 
 @dataclass(frozen=True)
@@ -149,9 +150,10 @@ class _Builder:
 
     # ----- tokens -----
     def language_of(self, text: str) -> str:
-        if self.line.get("language"):
-            return self.line["language"]
-        if self.opts.language != AUTO:
+        own = self.line.get("language")
+        if own and own != AUTO:
+            return own
+        if self.opts.language != AUTO and own != AUTO:
             return self.opts.language
         model_lang = self.speaker.language
         lang = langdetect.detect(text, model_lang) or self.last_lang or model_lang or "zh"
@@ -161,9 +163,10 @@ class _Builder:
         if self.pending_speaker is None:
             return
         tag, self.pending_speaker = self.pending_speaker, None
-        if self.line.get("language"):
-            lang = self.line["language"]
-        elif self.opts.language != AUTO:
+        own = self.line.get("language")
+        if own and own != AUTO:
+            lang = own
+        elif self.opts.language != AUTO and own != AUTO:
             lang = self.opts.language
         else:
             lang = langdetect.detect(next_text) if next_text else None
@@ -183,16 +186,18 @@ class _Builder:
             except ValueError:
                 self.warn(f"[speed:{value}] 不是数字，这句按原来的语速。")
         elif token.name == "preset":
-            if value in self.tuner.names:
+            if value.lower() == AUTO:
+                self.line["preset"] = ""  # the presets decide for this line, not the node's preset input
+            elif value in self.tuner.names:
                 self.line["preset"] = value
             else:
-                self.warn(f"没有叫 {value} 的预设，这句按生成设置走。")
+                self.warn(f"没有叫 {value} 的预设，这句按平时的语气走。")
         else:
             code = LANGUAGES.get(value.lower())
             if code:
                 self.line["language"] = code
             else:
-                self.warn(f"[lang:{value}] 只能是 ja / zh / en，这句自动判断语言。")
+                self.warn(f"[lang:{value}] 只能是 ja / zh / en / auto，这句自动判断语言。")
 
     def text(self, text: str) -> None:
         if self.take > 1 or self.line:

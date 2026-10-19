@@ -108,14 +108,15 @@ def _hook_free_memory() -> None:
 _hook_free_memory()
 
 
-TUNING_NAMES = {"stable": "稳定", "standard": "标准", "lively": "有起伏", "character": "角色特调", "node": "节点上改的值",
+# The names Anomalous shows for them (its tones and a character's Own settings).
+TUNING_NAMES = {"stable": "平稳", "standard": "自然", "lively": "生动", "character": "专属设置", "node": "节点上改的值",
                 "line": "单句设置"}
 
 
 def tuning_summary(lines, tuner: tuning.Tuner) -> str:
-    """Which settings the lines were sampled with, e.g. "生成设置：标准 3 句，角色特调 1 句"."""
+    """Which settings the lines were sampled with, e.g. "语气：自然 3 句，专属设置 1 句"."""
     counts = Counter(line.tuning.source for line in lines)
-    return "生成设置：" + "，".join(f"{TUNING_NAMES.get(name) or tuner.label(name)} {n} 句" for name, n in counts.items())
+    return "语气：" + "，".join(f"{TUNING_NAMES.get(name) or tuner.label(name)} {n} 句" for name, n in counts.items())
 
 
 def _adv(options: dict) -> dict:

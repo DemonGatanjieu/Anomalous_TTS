@@ -11,7 +11,8 @@ From lowest to highest priority:
 5. the node's ``preset`` input: every line's sampling numbers from that preset (speed stays);
 6. node inputs changed from the node's own defaults (and not just the character's
    ``defaults`` sent back by Anomalous);
-7. the line's own ``[preset:…]`` / ``[speed:…]`` in the script (core/script.py).
+7. the line's own ``[preset:…]`` / ``[speed:…]`` in the script (core/script.py); ``[preset:auto]``
+   leaves layer 5 out for that line.
 
 The presets file is written by Anomalous (``POST /anomalous_tts/presets``, this computer
 only); it holds names and numbers, never paths.
@@ -196,7 +197,8 @@ class Tuner:
         return known or bool(numbers)
 
     def for_line(self, defaults: Any, ref_lang: Optional[str], lang: str, line: Optional[Mapping[str, Any]] = None) -> Tuning:
-        """``line``: the line's own ``preset`` (a known name) and / or ``speed`` from the script."""
+        """``line``: the line's own ``preset`` (a known name, or "" for the layers without the node's
+        preset) and / or ``speed`` from the script."""
         values: Dict[str, float] = {**self.preset(self.default), "speed": 1.0}
         source = self.default
         defaults = defaults if isinstance(defaults, Mapping) else {}
@@ -208,13 +210,13 @@ class Tuner:
         own = (defaults.get("by_language") or {}).get(lang)
         if isinstance(own, Mapping) and self._apply(values, own):
             source = "character"
-        if self.chosen:
+        if self.chosen and not (line and line.get("preset") == ""):
             values.update(self.preset(self.chosen))
             source = self.chosen
         if self.node:
             values.update(self.node)
             source = "node"
-        if line:
+        if line and (line.get("preset") in self.names or "speed" in line):
             if line.get("preset") in self.names:
                 values.update(self.preset(line["preset"]))
             if "speed" in line:
