@@ -49,6 +49,7 @@ def test_no_route_takes_a_folder_or_a_file_on_this_computer(fresh):  # noqa: F81
         ("GET", "/anomalous_tts/characters"), ("GET", "/anomalous_tts/audio"), ("GET", "/anomalous_tts/reference_lines"),
         ("GET", "/anomalous_tts/status"), ("GET", "/anomalous_tts/presets"),
         ("POST", "/anomalous_tts/settings"), ("POST", "/anomalous_tts/presets"), ("POST", "/anomalous_tts/pretrained/download"),
+        ("POST", "/anomalous_tts/audio/remove"),
         ("POST", "/anomalous_tts/import/upload"), ("POST", "/anomalous_tts/import/inspect"),
         ("POST", "/anomalous_tts/import/commit"), ("POST", "/anomalous_tts/import/discard"),
     }  # no storage, libraries, pretrained/source, browse or import/preview

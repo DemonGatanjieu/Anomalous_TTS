@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from aiohttp import web
 
-from .core import app_config, characters, checkpoints, dependencies, downloads, importer, paths, settings, tuning
+from .core import app_config, characters, checkpoints, clip_removal, dependencies, downloads, importer, paths, settings, tuning
 
 log = logging.getLogger("Anomalous_TTS")
 
@@ -55,6 +55,15 @@ def _reference_lines_payload(name: str) -> Dict[str, Any]:
             lines[rel] = text
     seconds = {rel: round(characters.audio_seconds(c.abspath(rel)), 2) for rel in c.audio}
     return {"lines": lines, "seconds": seconds}
+
+
+def _remove_audio(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Reference clips to the Recycle Bin (core/clip_removal.py); a Recycle Bin that is missing
+    or a file in use is said as a 400, with nothing deleted."""
+    try:
+        return clip_removal.remove_clips(body.get("character"), body.get("paths"))
+    except OSError as e:
+        raise ValueError(str(e) or "没有删除") from e
 
 
 def _save_settings(body: Dict[str, Any]) -> Dict[str, Any]:
@@ -192,6 +201,11 @@ def register(prompt_server) -> None:
         body = await _json_body(request)
         result = await asyncio.get_running_loop().run_in_executor(None, _save_settings, body)
         return web.json_response(result)
+
+    @routes.post("/anomalous_tts/audio/remove")
+    async def post_audio_remove(request):
+        _require_local(request)
+        return web.json_response(await _in_thread(_remove_audio, await _json_body(request)))
 
     @routes.get("/anomalous_tts/presets")
     async def get_presets(request):
