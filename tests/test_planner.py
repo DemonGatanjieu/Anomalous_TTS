@@ -1,4 +1,5 @@
 import json
+import os
 
 import numpy as np
 import pytest
@@ -156,3 +157,48 @@ def test_a_take_changes_only_its_own_line(chars):
     # a take ends at the line break even without a following tag
     assert seeds("[take:2]一行目です。\n二行目です。")[1] == seeds("一行目です。\n二行目です。")[1]
     assert seeds("[take:2]一行目です。\n二行目です。")[0] != seeds("一行目です。\n二行目です。")[0]
+
+
+def test_auxiliary_references_and_fixed_lines(tmp_path, monkeypatch):
+    root = tmp_path / "gpt_sovits"
+    make_char(root, "普拉娜", "JA", {
+        "reference": {"aux": ["ref/b.wav", "ref/a.wav", "ref/none.wav", "ref/b.wav"]},  # main stays automatic
+        "emotions": {"开心": {"audio": "ref/c.开心.wav", "aux": ["ref/a.wav"]}},
+        "lines": {"ref/a.wav": "直した台詞"},
+    })
+    c = characters.discover([str(root)])["普拉娜"]
+    ref = c.default_reference()
+    # The automatic main reference, with the clips named in aux (not itself, not twice, only its own clips).
+    assert ref.audio == "ref/a.wav" and ref.text == "直した台詞" and ref.aux == ("ref/b.wav",)
+    assert c.emotions()["开心"].aux == ("ref/a.wav",)
+    assert c.to_api()["reference"]["aux"] == ["ref/b.wav"]
+    assert c.reference_text("ref/b.wav") == ("台词B", "ja")  # only the fixed clip changes
+
+    chars = {"普拉娜": c}
+    lines = build_plan(chars, NodeOptions(character="普拉娜", seed=1), "テスト。{开心}やった！").lines
+    assert [os.path.basename(p) for p in lines[0].voice.ref_aux] == ["b.wav"]
+    assert os.path.isabs(lines[0].voice.ref_aux[0])
+    assert [os.path.basename(p) for p in lines[1].voice.ref_aux] == ["a.wav"]
+    # The node's own reference line keeps the auxiliary references.
+    lines = build_plan(chars, NodeOptions(character="普拉娜", seed=1, reference_text="手动"), "テスト。").lines
+    assert lines[0].voice.ref_text == "手动" and len(lines[0].voice.ref_aux) == 1
+
+    # v3 / v4 / v5 decode from one reference: the auxiliary ones are left out, with a warning.
+    class Kind:
+        version = "v4"
+    monkeypatch.setattr(characters.Character, "sovits_kind", staticmethod(lambda path: Kind()))
+    plan = build_plan(chars, NodeOptions(character="普拉娜", seed=1), "テスト。")
+    assert plan.lines[0].voice.ref_aux == ()
+    assert any("副参考" in w and "v4" in w for w in plan.warnings)
+
+
+def test_reference_lines_give_the_seconds(tmp_path, monkeypatch):
+    from Anomalous_TTS import server
+
+    root = tmp_path / "gpt_sovits"
+    make_char(root, "普拉娜", "JA", {"lines": {"ref/b.wav": "直した"}})
+    chars = characters.discover([str(root)])
+    monkeypatch.setattr(characters, "scan", lambda max_age=None: chars)
+    out = server._reference_lines_payload("普拉娜")
+    assert out["seconds"]["ref/a.wav"] == 5 and out["seconds"]["ref/short.wav"] == 1
+    assert out["lines"]["ref/b.wav"] == "直した" and out["lines"]["ref/a.wav"] == "台词A"

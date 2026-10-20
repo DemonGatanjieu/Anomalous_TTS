@@ -22,6 +22,8 @@ CUSTOM_PRESET = re.compile(r"custom_[a-z0-9]{1,12}")
 
 def is_preset_name(name: Any) -> bool:
     return name in PRESETS or (isinstance(name, str) and CUSTOM_PRESET.fullmatch(name) is not None)
+# A reference line fixed in Anomalous (`lines`); a 3~10 s clip's line is far shorter.
+LINE_LIMIT = 500
 # `defaults` numbers: the node's own input ranges (nodes.py), so a saved value is always usable.
 DEFAULT_RANGES = {
     "speed": (0.5, 2.0),
@@ -60,6 +62,14 @@ def _check_ref(where: str, ref: Any, audio: Iterable[str], errors: List[str]) ->
         errors.append(f"{where}.text 必须是字符串")
     if "language" in ref and ref["language"] not in LANGS:
         errors.append(f"{where}.language 只能是 ja / zh / en")
+    if "aux" in ref:
+        aux = ref["aux"]
+        if not isinstance(aux, list) or not all(isinstance(a, str) for a in aux) or len(set(aux)) != len(aux):
+            errors.append(f"{where}.aux 必须是不重复的音频路径列表")
+        else:
+            for a in aux:
+                if a not in audio:
+                    errors.append(f"{where}.aux 里有不是这个角色文件夹里的音频：{a}")
 
 
 def check_block(where: str, block: Any, errors: List[str]) -> None:
@@ -117,6 +127,15 @@ def validate(data: Any, gpt: Iterable[str], sovits: Iterable[str], audio: Iterab
         isinstance(k, str) and k.strip() and isinstance(v, str) for k, v in replace.items()
     ):
         errors.append("replace 必须是 {\"原文\": \"读法\"} 的对象，原文不能为空")
+    lines = data.get("lines", {})
+    if not isinstance(lines, dict):
+        errors.append("lines 必须是 {\"音频路径\": \"台词\"} 的对象")
+    else:
+        for rel, text in lines.items():
+            if rel not in audio:
+                errors.append(f"lines 里有不是这个角色文件夹里的音频：{rel}")
+            elif not isinstance(text, str) or not text.strip() or len(text) > LINE_LIMIT:
+                errors.append(f"lines.{rel} 必须是 1~{LINE_LIMIT} 字的台词")
     emotions = data.get("emotions", {})
     if not isinstance(emotions, dict):
         errors.append("emotions 必须是对象")

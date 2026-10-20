@@ -72,6 +72,7 @@ class _Reference:
     spec: torch.Tensor
     sv_emb: Optional[torch.Tensor]
     mel: Optional[torch.Tensor] = None  # v3 / v4 / v5: normalized mel of the reference audio
+    aux: List[Tuple[torch.Tensor, Optional[torch.Tensor]]] = field(default_factory=list)  # (spec, sv_emb) each
 
 
 class Engine:
@@ -286,22 +287,31 @@ class Engine:
         return ((mel - SPEC_MIN) / (SPEC_MAX - SPEC_MIN) * 2 - 1).to(self.dtype)
 
     def _reference(self, voice: Voice, sovits: SoVITSModel) -> _Reference:
-        key = (file_key(voice.sovits_path), file_key(voice.ref_wav), voice.ref_text, voice.ref_lang)
+        key = (file_key(voice.sovits_path), file_key(voice.ref_wav), voice.ref_text, voice.ref_lang,
+               tuple(file_key(path) for path in voice.ref_aux))
 
         def build() -> _Reference:
             spec, sv_emb = self._spec_and_sv(sovits, voice.ref_wav)
+            # Auxiliary references only add their timbre (v3 / v4 / v5 decode from one reference).
+            aux = [] if sovits.makes_mel else [self._aux_spec(sovits, voice, path) for path in voice.ref_aux]
             if not voice.ref_text:
                 if sovits.makes_mel:
                     raise ValueError(f"{voice.label} 是 {sovits.version} 模型，参考音频必须有台词（这个版本没有无参考文本模式）。")
-                return _Reference(None, [], None, spec, sv_emb)
+                return _Reference(None, [], None, spec, sv_emb, aux=aux)
             prompt = self._prompt_semantic(sovits, voice.ref_wav)
             phones, bert = text_frontend.get_phones_and_bert(
                 text_frontend.ensure_sentence_end(voice.ref_text, voice.ref_lang), voice.ref_lang, self
             )
             mel = self._reference_mel(sovits, voice.ref_wav) if sovits.makes_mel else None
-            return _Reference(prompt, phones, bert, spec, sv_emb, mel)
+            return _Reference(prompt, phones, bert, spec, sv_emb, mel, aux)
 
         return self._refs.get_or_create(key, build)
+
+    def _aux_spec(self, sovits: SoVITSModel, voice: Voice, path: str) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        try:
+            return self._spec_and_sv(sovits, path)
+        except Exception as e:
+            raise ValueError(f"{voice.label} 的副参考音频 {os.path.basename(path)} 读不了：{e}") from e
 
     # ================= synthesis =================
     def _line_keys(self, line: Line) -> Tuple[Tuple, Tuple]:
@@ -310,7 +320,8 @@ class Engine:
             file_key(v.gpt_path), file_key(v.sovits_path), file_key(v.ref_wav), v.ref_text, v.ref_lang,
             line.text, line.language, line.seed, line.tuning.sampling_key(), str(self.dtype),
         )
-        audio_key = token_key + (float(line.tuning.speed),)
+        # The auxiliary references change the timbre only, so the tokens stay the same.
+        audio_key = token_key + (float(line.tuning.speed), tuple(file_key(path) for path in v.ref_aux))
         return token_key, audio_key
 
     @torch.inference_mode()
@@ -365,9 +376,9 @@ class Engine:
                 audio = sovits.model.decode(
                     tokens.to(self.device).view(1, 1, -1),
                     torch.LongTensor(phones).unsqueeze(0).to(self.device),
-                    [ref.spec],
+                    [ref.spec] + [spec for spec, _ in ref.aux],  # several: their timbre is averaged
                     speed=float(line.tuning.speed),
-                    sv_emb=[ref.sv_emb] if sovits.is_v2pro else None,
+                    sv_emb=[ref.sv_emb] + [emb for _, emb in ref.aux] if sovits.is_v2pro else None,
                 )[0][0]
         audio = audio.float().cpu().numpy()
         peak = float(np.abs(audio).max()) if audio.size else 0.0

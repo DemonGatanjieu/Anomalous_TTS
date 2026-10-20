@@ -51,12 +51,14 @@ Anomalous 推送剧本时只需要设置两个输入：
   "reference": {
     "audio": "参考音频/Arona_Academy_Talk_3.wav",
     "text": "通常授業！課外授業！自由時間！どれを選びますか？",
-    "language": "ja"
+    "language": "ja",
+    "aux": ["参考音频/Arona_Lobby_2.wav", "参考音频/Arona_Talk_7.wav"]
   },
   "emotions": {
     "开心": { "audio": "参考音频/Arona_AttendanceEvent03_Enter_1.wav" },
     "生气": { "audio": "参考音频/Arona_Work_Talk_3.wav", "text": "…", "language": "ja" }
   },
+  "lines": { "参考音频/Arona_Lobby_2.wav": "えへへ、先生のお役に立てましたか？" },
   "replace": { "C站": "西站", "LoRA": "萝拉" },
   "defaults": { "language": "zh", "speed": 1.1 }
 }
@@ -71,8 +73,10 @@ Anomalous 推送剧本时只需要设置两个输入：
 | `reference` | 主参考（剧本里没标情绪、或 `{main}` 的部分） |
 | `emotions` | 情绪名 → 参考。情绪名就是剧本里 `{情绪}` 里写的字 |
 | `defaults` | 这个角色的生成设置：`language`（`auto` / `ja` / `zh` / `en`，只有 Anomalous 读：直接生成时用它填节点输入）、`preset`（`stable` / `standard` / `lively`，或预设文件里自建的 `custom_…`，见 5.4；自建的后来删了就当没写）、`speed`（0.5~2.0），以及采样参数 `top_k`（1~100 整数）、`top_p`（0.05~1）、`temperature`（0.05~2）、`repetition_penalty`（1~2）；`by_language`：`{"zh": {…}}`，这个角色说某种语言时的设置，字段同上（`preset`、`speed` 和四个采样参数）。都可以不写。节点读 `preset`、`speed`、采样参数和 `by_language`，叠加顺序见 5.4 |
+| `aux`（参考里） | 副参考音频：角色文件夹里的音频路径列表（不重复）。生成时它们和这条参考的音色取平均（GPT-SoVITS 的多参考融合音色），只影响音色，不影响语气和念法，不需要台词。只在 v1 / v2 / v2Pro / v2ProPlus 模型里起作用；v3 / v4 / v5 只用这条参考，节点略过副参考并在 `info` 里提示。`reference` 可以只写 `aux` 不写 `audio`：主参考照常自动挑，再加上这些副参考。和参考本身相同的路径不算 |
+| `lines` | 改过的参考台词：音频路径 → 台词（1~500 字）。比这条音频的同名 `.txt` / `.lab` 和标注文件优先（参考里写的 `text` 仍然最优先）；原来的台词文件不动。Anomalous 的参考音频编辑器写它 |
 | `replace` | 读音替换：剧本里写的 → 这个角色实际读的。合成前替换（长的先匹配，只替换一遍），剧本和字幕照常写。原文不能为空，读法可以为空（不读） |
-| `text` | 参考台词；不写就依次找：同名 `.txt` 或 `.lab` → 文件夹里的 GPT-SoVITS 标注文件（`.list` 或同格式 `.txt`，`路径|说话人|语言|台词`，先按文件名找，再按去掉情绪后缀的文件名找）→ 都没有则用无参考文本模式 |
+| `text` | 参考台词；不写就依次找：`lines` 里改过的 → 同名 `.txt` 或 `.lab` → 文件夹里的 GPT-SoVITS 标注文件（`.list` 或同格式 `.txt`，`路径|说话人|语言|台词`，先按文件名找，再按去掉情绪后缀的文件名找）→ 都没有则用无参考文本模式 |
 | `language`（参考里） | 参考台词语言；不写就用标注文件里的，再没有就按台词文字自动判断 |
 
 **优先级**（高 → 低）：节点上手动填的 → 设置文件 → 文件名约定（`原名.情绪.wav`，情绪名是文件名第一个点之后的部分；只是音频扩展名的部分不算情绪，例如 `X.ogg.wav`、`X.ogg (1).ogg`）→ 自动挑选。
@@ -128,16 +132,16 @@ Anomalous 推送剧本时只需要设置两个输入：
       "counts": { "gpt": 3, "sovits": 4, "audio": 135 },
       "version": "v2",
       "needs": [],
-      "reference": { "audio": "参考音频/Arona_Academy_Talk_3.wav", "text": "…", "language": "ja", "source": "auto" },
+      "reference": { "audio": "参考音频/Arona_Academy_Talk_3.wav", "text": "…", "language": "ja", "source": "auto", "aux": [] },
       "emotions": {
-        "开心": { "audio": "…", "text": "…", "language": "ja", "source": "settings" }
+        "开心": { "audio": "…", "text": "…", "language": "ja", "source": "settings", "aux": ["参考音频/b.wav"] }
       }
     }
   ]
 }
 ```
 
-- `reference` / `emotions` 是解析后的最终结果（已按第 3 节的优先级合并），`source` 为 `settings`、`filename` 或 `auto`。`reference` 可能为 `null`（没有 3~10 秒的音频）。
+- `reference` / `emotions` 是解析后的最终结果（已按第 3 节的优先级合并），`source` 为 `settings`、`filename` 或 `auto`；`aux` 是其中起作用的副参考（只算这个角色的音频，不含参考本身；18 起）。`reference` 可能为 `null`（没有 3~10 秒的音频）。
 - `version`：默认 SoVITS 权重（第 3 节 `sovits`，不写就是轮数最大的）的模型版本：`v1`、`v2`、`v2Pro`、`v2ProPlus`、`v3`、`v4`、`v5dev`、`v5turbo`。读不出来（没有权重、文件坏了）时为 `null`。只读文件开头，不加载模型。
 - `needs`：这个模型除了所有角色都用的底模，还要哪些底模（`status.pretrained` 的 `id`）：v2Pro 要 `sv`；v3 要 `bigvgan`（从 v3 底模训练的 LoRA 还要 `v3`）；v4、v5dev、v5turbo 各要同名的一项（底模 + 声码器）。v1、v2 是空列表。
 - 摘要里**没有**文件列表（一个角色可能有上千个音频）。要文件列表时取单个角色的详情。
@@ -153,7 +157,7 @@ Anomalous 推送剧本时只需要设置两个输入：
 
 #### `GET /anomalous_tts/reference_lines?character=<name>`
 
-这个角色每条音频当参考时节点会用的台词：`{"lines": {"参考音频/a.wav": "…", …}}`。台词按第 3 节的顺序找（同名 `.txt` / `.lab` → 标注文件）。找不到台词、文本文件读不了、或者超过 500 字（那不是一句参考台词）的音频不在里面。不收路径：只读扫描时登记在这个角色名下的文本文件；只读，不写任何东西。角色不存在返回 404。Anomalous 在“编辑情绪”里用它搜索台词和换音频时填台词。
+这个角色每条音频当参考时节点会用的台词，和每条音频的长度（秒，读不出来为 0；18 起）：`{"lines": {"参考音频/a.wav": "…", …}, "seconds": {"参考音频/a.wav": 5.12, …}}`。台词按第 3 节的顺序找（设置文件 `lines` 里改过的 → 同名 `.txt` / `.lab` → 标注文件）。找不到台词、文本文件读不了、或者超过 500 字（那不是一句参考台词）的音频不在里面。不收路径：只读扫描时登记在这个角色名下的文本文件；只读，不写任何东西。角色不存在返回 404。Anomalous 在“编辑情绪”里用它搜索台词和换音频时填台词。
 
 #### 🔒 `POST /anomalous_tts/settings`
 
@@ -363,6 +367,7 @@ window.anomalous_open_voice(character)  // → true：已打开浏览器的“�
 
 ## 变更记录
 
+- 18（2026-10-20）：副参考音频：参考（`reference`、`emotions` 里的每一项）加 `aux`，生成时和参考的音色取平均（v1 / v2 / v2Pro）；设置文件加 `lines`（改过的参考台词，比台词文件优先）；角色摘要的参考加 `aux`；`reference_lines` 加 `seconds`。不写时结果和 17 一样。`format` 改为 18。
 - 17（2026-10-20）：剧本语法加单句设置（也可写 `[lang:auto]`、`[preset:auto]` 回到自动） `[speed:…]`、`[preset:…]`、`[lang:…]`（第 4 节，5.4 第 7 层）：多角色配音里每个角色、每一句可以各用各的语速、预设和语言，节点输入不再需要代表整段。不写时结果和 16 一样。`format` 改为 17。
 - 1（2026-09-24）：初版。
 - 2（2026-09-25）：`/anomalous_tts/characters` 列表只返回摘要（去掉 `gpt` / `sovits` / `audio`，加 `counts`），文件列表改由 `?name=` 取单个角色；加 `?refresh=1`；`format` 改为 2。文件名里只是扩展名的部分（`X.ogg.wav`）不再当作情绪。节点的 `reference_audio` 改为文本框（相对路径）。

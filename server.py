@@ -13,7 +13,7 @@ from .core import app_config, characters, checkpoints, dependencies, downloads, 
 
 log = logging.getLogger("Anomalous_TTS")
 
-API_FORMAT = 17
+API_FORMAT = 18
 LOCAL_ADDRESSES = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 
 
@@ -34,13 +34,14 @@ def _characters_payload(name: Optional[str], refresh: bool) -> Dict[str, Any]:
     return {"format": API_FORMAT, "characters": [_summary(c, detail=False) for c in chars.values()]}
 
 
-LINE_LIMIT = 500  # a 3~10 s clip's line is far shorter; a longer text file is not a line
+LINE_LIMIT = settings.LINE_LIMIT  # a 3~10 s clip's line is far shorter; a longer text file is not a line
 
 
 def _reference_lines_payload(name: str) -> Dict[str, Any]:
-    """Each clip's reference line as the node finds it. Takes no path: only the text files the
-    scan listed for this character are read. Clips without a line, with an unreadable text file
-    or a text longer than LINE_LIMIT are left out."""
+    """Each clip's reference line as the node finds it (a line fixed in the settings first) and
+    its length in seconds. Takes no path: only the text files the scan listed for this character
+    are read. Clips without a line, with an unreadable text file or a text longer than LINE_LIMIT
+    have no line; a clip whose length cannot be read has 0."""
     c = characters.scan().get(name)
     if c is None:
         raise web.HTTPNotFound(text=f"找不到角色：{name}")
@@ -52,7 +53,8 @@ def _reference_lines_payload(name: str) -> Dict[str, Any]:
             continue
         if text and len(text) <= LINE_LIMIT:
             lines[rel] = text
-    return {"lines": lines}
+    seconds = {rel: round(characters.audio_seconds(c.abspath(rel)), 2) for rel in c.audio}
+    return {"lines": lines, "seconds": seconds}
 
 
 def _save_settings(body: Dict[str, Any]) -> Dict[str, Any]:

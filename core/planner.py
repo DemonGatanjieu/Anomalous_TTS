@@ -18,6 +18,8 @@ from .characters import AUTO, MAIN, Character, Reference, resolve_name
 from .tuning import Tuner, Tuning
 
 MIN_SPEED, MAX_SPEED = 0.5, 2.0  # the node's speed input
+# Models that average the timbre of several references (GPT-SoVITS inp_refs); v3 / v4 / v5 use one.
+AUX_VERSIONS = {"v1", "v2", "v2Pro", "v2ProPlus"}
 LANGUAGES = {"ja": "ja", "jp": "ja", "zh": "zh", "cn": "zh", "en": "en", "日语": "ja", "中文": "zh", "英语": "en",
              AUTO: AUTO, "自动": AUTO}  # auto: detected for this line even when the node's language is set
 
@@ -32,6 +34,7 @@ class Voice:
     ref_text: str
     ref_lang: str
     label: str  # for logs, e.g. "阿罗娜/日配{开心}"
+    ref_aux: Tuple[str, ...] = ()  # auxiliary references (absolute): timbre averaged in (v1 / v2 / v2Pro)
 
 
 @dataclass(frozen=True)
@@ -125,7 +128,7 @@ class _Builder:
             if ref is None:
                 raise ValueError(f"角色 {c.name} 里没有 3~10 秒的参考音频。")
         if is_node_char and self.opts.reference_text.strip():
-            ref = Reference(ref.audio, self.opts.reference_text.strip(), ref.language, "node")
+            ref = Reference(ref.audio, self.opts.reference_text.strip(), ref.language, "node", ref.aux)
         return ref
 
     def voice(self, c: Character, emotion: str, sentence_lang: str) -> Voice:
@@ -136,13 +139,21 @@ class _Builder:
         if key not in self.voices:
             ref = self._reference(c, emotion)
             is_node_char = c.name == self.opts.character
+            sovits_path = c.weight("sovits", self.opts.sovits if is_node_char else None)
+            label = c.name if emotion == MAIN else f"{c.name}{{{emotion}}}"
+            aux = ref.aux
+            kind = c.sovits_kind(sovits_path) if aux else None
+            if kind is not None and kind.version not in AUX_VERSIONS:
+                self.warn(f"{label} 的副参考音频只在 v1 / v2 / v2Pro 模型里有用，这个模型是 {kind.version}，已略过。")
+                aux = ()
             self.voices[key] = Voice(
                 gpt_path=c.weight("gpt", self.opts.gpt if is_node_char else None),
-                sovits_path=c.weight("sovits", self.opts.sovits if is_node_char else None),
+                sovits_path=sovits_path,
                 ref_wav=c.abspath(ref.audio),
                 ref_text=ref.text,
                 ref_lang=ref.language or c.language or sentence_lang,
-                label=c.name if emotion == MAIN else f"{c.name}{{{emotion}}}",
+                label=label,
+                ref_aux=tuple(c.abspath(rel) for rel in aux),
             )
             if not ref.text:
                 self.warn(f"{self.voices[key].label} 的参考音频 {ref.audio} 没有台词，使用无参考文本模式（效果会差一些）。")

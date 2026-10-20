@@ -9,7 +9,10 @@ implementation.
   those becomes a character named ``角色/子文件夹``.
 - Settings come from ``anomalous_tts.json`` (core/settings.py), then from the
   file-name convention ``原名.情绪.wav``, then from automatic choices.
-- Reference text: settings → same-name ``.txt`` / ``.lab`` → GPT-SoVITS annotation files
+- Auxiliary references (``aux`` in a reference's settings): more clips whose timbre is averaged
+  with the reference's when the line is decoded (SoVITS v1 / v2 / v2Pro); they need no line.
+- Reference text: settings (the reference's ``text``, then the line fixed for that clip in
+  ``lines``) → same-name ``.txt`` / ``.lab`` → GPT-SoVITS annotation files
   (``.list`` or ``.txt`` with ``path|speaker|LANG|text`` lines), matched by file
   name and then by the name without the emotion part.
 """
@@ -52,9 +55,11 @@ class Reference:
     text: str  # "" = no reference text (GPT-SoVITS "ref free" mode)
     language: Optional[str]
     source: str  # settings | filename | auto | node
+    aux: Tuple[str, ...] = ()  # auxiliary references: their timbre is averaged in (relative paths)
 
     def to_api(self) -> Dict[str, Any]:
-        return {"audio": self.audio, "text": self.text, "language": self.language, "source": self.source}
+        return {"audio": self.audio, "text": self.text, "language": self.language, "source": self.source,
+                "aux": list(self.aux)}
 
 
 # "X.ogg.wav" / "X.ogg (1).ogg" are converted or downloaded copies, not emotions.
@@ -273,7 +278,11 @@ class Character:
 
     # ----- reference text -----
     def reference_text(self, audio_rel: str) -> Tuple[str, Optional[str]]:
-        """(text, language or None). Empty text if nothing is found."""
+        """(text, language or None). Empty text if nothing is found. A line fixed in the settings
+        (``lines``) comes before the clip's text files."""
+        fixed = self.settings.get("lines")
+        if isinstance(fixed, dict) and isinstance(fixed.get(audio_rel), str) and fixed[audio_rel].strip():
+            return fixed[audio_rel].strip(), None
         stem = os.path.splitext(audio_rel)[0]
         sidecar = next((stem + ext for ext in SIDECAR_EXTS if stem + ext in self.text_files), None)
         return find_text(
@@ -290,7 +299,19 @@ class Character:
             from .langdetect import detect
 
             lang = detect(text, self.language)
-        return Reference(audio_rel, text, lang or self.language, source)
+        return Reference(audio_rel, text, lang or self.language, source, self.aux_of(spec, audio_rel))
+
+    def aux_of(self, spec: Optional[Dict[str, Any]], main: str) -> Tuple[str, ...]:
+        """The auxiliary references in ``spec`` that are this character's clips, without ``main``."""
+        aux = spec.get("aux") if isinstance(spec, dict) else None
+        if not isinstance(aux, list):
+            return ()
+        known = set(self.audio)
+        out: List[str] = []
+        for rel in aux:
+            if isinstance(rel, str) and rel in known and rel != main and rel not in out:
+                out.append(rel)
+        return tuple(out)
 
     # ----- main reference and emotions -----
     def default_reference(self) -> Optional[Reference]:
@@ -329,7 +350,12 @@ class Character:
                 best = (key, ref)
             if key[1] == 0:
                 break
-        return best[1] if best else None
+        if best is None:
+            return None
+        # Auxiliary references can be set for the main voice while its reference stays automatic.
+        ref = best[1]
+        ref.aux = self.aux_of(spec, ref.audio)
+        return ref
 
     @cached_property
     def _emotions(self) -> Dict[str, Reference]:

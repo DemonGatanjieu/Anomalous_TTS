@@ -36,3 +36,17 @@ def test_validate_defaults():
     assert settings.validate({"defaults": good}, [], [], []) == []
     assert len(settings.validate({"defaults": {"top_k": 1.5, "top_p": 0, "temperature": 3, "repetition_penalty": True}}, [], [], [])) == 4
     assert settings.validate({"defaults": []}, [], [], [])
+
+
+def test_validate_aux_and_lines():
+    audio = ["a.wav", "b.wav", "c.wav"]
+    good = {"reference": {"audio": "a.wav", "aux": ["b.wav", "c.wav"]}, "emotions": {"开心": {"audio": "b.wav", "aux": []}},
+            "lines": {"c.wav": "改过的台词"}}
+    assert settings.validate(good, [], [], audio) == []
+    assert settings.validate({"reference": {"aux": ["b.wav"]}}, [], [], audio) == []  # the main reference stays automatic
+    assert len(settings.validate({"reference": {"aux": "b.wav"}}, [], [], audio)) == 1
+    assert len(settings.validate({"reference": {"aux": ["b.wav", "b.wav"]}}, [], [], audio)) == 1
+    assert len(settings.validate({"emotions": {"开心": {"audio": "a.wav", "aux": ["../x.wav"]}}}, [], [], audio)) == 1
+    assert len(settings.validate({"lines": {"x.wav": "t", "a.wav": " ", "b.wav": 3}}, [], [], audio)) == 3
+    assert len(settings.validate({"lines": {"a.wav": "长" * (settings.LINE_LIMIT + 1)}}, [], [], audio)) == 1
+    assert len(settings.validate({"lines": []}, [], [], audio)) == 1
