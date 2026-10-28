@@ -81,3 +81,65 @@ def test_no_recycle_bin_deletes_nothing(lib, monkeypatch):
         server._remove_audio({"character": "普拉娜", "paths": ["ref/a.wav"]})
     assert (folder / "ref" / "a.wav").exists()
     assert "audio" in json.loads((folder / "anomalous_tts.json").read_text(encoding="utf-8"))["reference"]
+
+
+@pytest.fixture
+def library(tmp_path, monkeypatch):
+    from Anomalous_TTS.core import paths
+
+    root = tmp_path / "gpt_sovits"
+    make_char(root, "普拉娜", "JA", {})
+    make_char(root / "阿罗娜", "日配", "JA", {})
+    make_char(root / "阿罗娜", "中配", "ZH", {})
+    monkeypatch.setattr(characters, "scan", lambda max_age=None: characters.discover([str(root)]))
+    monkeypatch.setattr(paths, "roots", lambda: [str(root)])
+    moved = []
+
+    def fake_trash(targets):
+        import shutil
+        targets = list(targets)
+        for path in targets:
+            moved.append(path)
+            shutil.rmtree(path)
+        return targets
+
+    monkeypatch.setattr(clip_removal, "move_to_trash", fake_trash)
+    return root, moved
+
+
+def test_remove_character_moves_its_folder_to_the_recycle_bin(library):
+    root, moved = library
+    assert server._remove_character({"character": "普拉娜"}) == {"ok": True, "removed": "普拉娜"}
+    assert [p.replace("\\", "/").split("/gpt_sovits/")[-1] for p in moved] == ["普拉娜"]
+    assert not (root / "普拉娜").exists()
+    # A variant takes only its own subfolder.
+    server._remove_character({"character": "阿罗娜/日配"})
+    assert not (root / "阿罗娜" / "日配").exists() and (root / "阿罗娜" / "中配").exists()
+
+
+def test_remove_character_takes_only_a_known_character_inside_a_library(library, monkeypatch):
+    from Anomalous_TTS.core import paths
+
+    root, moved = library
+    for bad in ({"character": "没有这个人"}, {"character": ""}, {"character": ["普拉娜"]}, {}):
+        with pytest.raises(ValueError):
+            server._remove_character(bad)
+    monkeypatch.setattr(paths, "roots", lambda: [str(root / "普拉娜")])  # the folder is a library itself
+    with pytest.raises(ValueError, match="角色库"):
+        server._remove_character({"character": "普拉娜"})
+    monkeypatch.setattr(paths, "roots", lambda: [])
+    with pytest.raises(ValueError, match="角色库"):
+        server._remove_character({"character": "普拉娜"})
+    assert moved == [] and (root / "普拉娜").exists()
+
+
+def test_remove_character_without_a_recycle_bin_deletes_nothing(library, monkeypatch):
+    root, _ = library
+
+    def no_bin(targets):
+        raise clip_removal.TrashUnavailable("没有回收站")
+
+    monkeypatch.setattr(clip_removal, "move_to_trash", no_bin)
+    with pytest.raises(ValueError, match="回收站"):
+        server._remove_character({"character": "普拉娜"})
+    assert (root / "普拉娜").exists()

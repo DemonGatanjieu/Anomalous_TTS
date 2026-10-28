@@ -46,7 +46,7 @@ ComfyUI Python
 - `core/importer.py`：导入角色：分块上传的暂存（只收上传的文件，不按路径读本机文件）、按扩展名判断文件种类（`kind_of`）、检查（版本、时长、台词）、创建或追加。台词查找复用 `characters.find_text`，设置校验复用 `settings.validate`，不另写一套规则。往已有角色里加时，同样的文件跳过、标注文件追加新行（失败时截回原长度），只有同名不同内容才拒绝。
 - `core/characters.py`：角色发现、默认权重、参考音频和情绪的解析、读音替换（`respell`），是 INTERFACE.md 第 2、3 节规则的**唯一实现**。自动挑主参考的顺序（`reference_rank`）导入时也用它。扫描结果缓存 30 秒，`invalidate()` 清空。
 - `core/settings.py`：`anomalous_tts.json` 的读、校验、原子写入；不认识的字段原样保留。
-- `core/clip_removal.py`：删除参考音频：只收扫描登记在这个角色名下的音频，连同它自己的同名 `.txt` / `.lab` 一起移到系统回收站（没有回收站的位置不删，说明原因；从不永久删除），再把设置文件里提到它们的地方去掉（主参考回到自动挑、用它当主参考的情绪去掉、副参考和改过的台词去掉）。标注文件（`.list`）不动。
+- `core/clip_removal.py`：删除参考音频：只收扫描登记在这个角色名下的音频，连同它自己的同名 `.txt` / `.lab` 一起移到系统回收站（没有回收站的位置不删，说明原因；从不永久删除），再把设置文件里提到它们的地方去掉（主参考回到自动挑、用它当主参考的情绪去掉、副参考和改过的台词去掉）。标注文件（`.list`）不动。删除整个角色：扫描到的角色文件夹整个移到回收站（变体只移自己的子文件夹），文件夹必须在角色库里面、本身不是角色库。
 - `core/tuning.py`：每一句用什么采样参数和语速：三档预设（`stable` / `standard` / `lively`）和预设文件里自建的档（`custom_…`）、按语言组合的规则、角色自己的 `defaults`（含 `by_language`）、节点上改过的值，按这个顺序叠加；还有预设文件 `ComfyUI/user/anomalous_tts_presets.json`（Anomalous 写，只有名字和数字，没有路径）。`planner` 给每个 `Line` 算好 `tuning`，引擎只照着用。
 - `core/script.py`、`core/langdetect.py`：剧本语法、按句判断语言。
 - `core/planner.py`：把剧本变成 `Plan`。每个 `Line` 带齐引擎需要的全部信息，引擎不再回头看角色或设置。

@@ -13,7 +13,7 @@ from .core import app_config, characters, checkpoints, clip_removal, dependencie
 
 log = logging.getLogger("Anomalous_TTS")
 
-API_FORMAT = 18
+API_FORMAT = 19
 LOCAL_ADDRESSES = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 
 
@@ -62,6 +62,14 @@ def _remove_audio(body: Dict[str, Any]) -> Dict[str, Any]:
     or a file in use is said as a 400, with nothing deleted."""
     try:
         return clip_removal.remove_clips(body.get("character"), body.get("paths"))
+    except OSError as e:
+        raise ValueError(str(e) or "没有删除") from e
+
+
+def _remove_character(body: Dict[str, Any]) -> Dict[str, Any]:
+    """A whole character's folder to the Recycle Bin (core/clip_removal.py), the same way."""
+    try:
+        return clip_removal.remove_character(body.get("character"))
     except OSError as e:
         raise ValueError(str(e) or "没有删除") from e
 
@@ -206,6 +214,11 @@ def register(prompt_server) -> None:
     async def post_audio_remove(request):
         _require_local(request)
         return web.json_response(await _in_thread(_remove_audio, await _json_body(request)))
+
+    @routes.post("/anomalous_tts/character/remove")
+    async def post_character_remove(request):
+        _require_local(request)
+        return web.json_response(await _in_thread(_remove_character, await _json_body(request)))
 
     @routes.get("/anomalous_tts/presets")
     async def get_presets(request):

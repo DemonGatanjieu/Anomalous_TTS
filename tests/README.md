@@ -36,6 +36,7 @@ assets/
 | `test_setup.py` | 设置文件里的底模来源、后台下载、准备状态、只允许本机写入 |
 | `test_storage.py` | 存放位置和角色文件夹只来自设置文件；没有接口接受本机路径（路由清单固定，按路径导入被拒）；坏的设置项被忽略；存放位置暂时不在时不换地方 |
 | `test_frontend.py` | 日 / 中 / 英音素与基准一致（基准已和官方 GPT-SoVITS 对过，见 UPSTREAM.md） |
+| `test_clip_removal.py` | 删除参考音频和整个角色：只移到回收站、只收这个角色自己的音频、角色文件夹必须在角色库里面、没有回收站时什么都不删、设置里去掉删掉的音频 |
 | `test_vram.py` | ComfyUI 显存不够时让出我们的模型，够时留着 |
 | `test_structure.py` | 每个源码文件在 ARCHITECTURE.md 里都有一行、每个模块都从 `__init__.py` 导入到；超过 600 行时警告 |
 | `test_tuning.py` | 生成预设：什么都不设时和以前一样（同语言 standard，跨语言 stable）、各层的先后、预设文件的校验和读写、角色的 `by_language`、节点上只有改过的值才算数 |

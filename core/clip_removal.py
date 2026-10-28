@@ -1,8 +1,9 @@
-"""Removing reference clips from a character: the clips and their own line files go to the
-system Recycle Bin (never deleted for good), and the character's settings stop naming them.
+"""Removing reference clips from a character, or a whole character: the clips and their own
+line files, or the character's folder, go to the system Recycle Bin (never deleted for good),
+and the character's settings stop naming removed clips.
 
-Only clips the scan listed for that character are taken; nothing is read or moved by a path
-from the request alone. Annotation files (``.list``) are left as they are: a line for a clip
+Only clips and folders the scan listed for that character are taken; nothing is read or moved
+by a path from the request alone. Annotation files (``.list``) are left as they are: a line for a clip
 that is gone is not used by anything.
 """
 
@@ -11,7 +12,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Iterable, List, Set
 
-from . import characters, settings
+from . import characters, paths, settings
 from .characters import SIDECAR_EXTS, Character
 
 MAX_AT_ONCE = 200
@@ -163,3 +164,19 @@ def remove_clips(name: str, rels: Any) -> Dict[str, Any]:
     characters.invalidate()
     after = characters.scan(max_age=0).get(name)
     return {"ok": True, "removed": rels, "text_files": texts, "character": after.to_api(detail=True) if after else None}
+
+
+def remove_character(name: Any) -> Dict[str, Any]:
+    """Moves the character's folder (weights, clips, settings) to the Recycle Bin. A variant
+    (``角色/日配``) takes only its own subfolder. ValueError for an unknown name or a folder that
+    is not strictly inside a character library."""
+    chars = characters.scan(max_age=0)
+    if not isinstance(name, str) or name not in chars:
+        raise ValueError(f"找不到角色：{name}")
+    folder = os.path.abspath(chars[name].folder)
+    roots = paths.roots()
+    if not any(paths.is_inside(folder, root) for root in roots) or any(paths.is_inside(root, folder) for root in roots):
+        raise ValueError("这个角色的文件夹不在角色库里面，为了安全没有删除。")
+    move_to_trash([folder])
+    characters.invalidate()
+    return {"ok": True, "removed": name}
