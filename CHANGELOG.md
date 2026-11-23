@@ -2,7 +2,8 @@
 
 写给用户看的变化。实现细节看 Git 历史，接口变化看 [docs/INTERFACE.md](docs/INTERFACE.md) 的变更记录。
 
-## 未发布
+## v1.1.2（2026-11-23）
+修复：Python 3.12 及以上配旧版 setuptools 时中文读不了。
 
 - Python 3.12 及以上、装的 setuptools 又比较旧时，中文一读就报错（`module 'pkgutil' has no attribute 'ImpImporter'`，B站观众反馈）。现在中文照常能读，ComfyUI 的日志里会提示一行怎么升级 setuptools。
 
