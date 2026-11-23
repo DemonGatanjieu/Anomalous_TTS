@@ -106,6 +106,9 @@ class AssetResources:
     def english_dirs(self):
         return str(self.root / "en_dict"), str(self.root / "nltk_data")
 
+    def sovits_pretrained(self, version):
+        raise FileNotFoundError(f"ANOMALOUS_TTS_ASSETS has no {version} base model: use a v2 character")
+
 
 @pytest.fixture(scope="session")
 def engine():

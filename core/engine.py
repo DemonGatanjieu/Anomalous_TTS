@@ -218,6 +218,7 @@ class Engine:
         if self._zh_ready:
             return
         self._zh_ready = True
+        dependencies.hide_broken_pkg_resources()
         from ..vendor.gpt_sovits.text import chinese2
 
         if importlib.util.find_spec("opencc") is None:  # g2pW converts to Traditional Chinese first

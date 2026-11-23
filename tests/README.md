@@ -38,6 +38,7 @@ assets/
 | `test_frontend.py` | 日 / 中 / 英音素与基准一致（基准已和官方 GPT-SoVITS 对过，见 UPSTREAM.md） |
 | `test_clip_removal.py` | 删除参考音频和整个角色：只移到回收站、只收这个角色自己的音频、角色文件夹必须在角色库里面、没有回收站时什么都不删、设置里去掉删掉的音频 |
 | `test_vram.py` | ComfyUI 显存不够时让出我们的模型，够时留着 |
+| `test_dependencies.py` | setuptools 太旧（导入 `pkg_resources` 报 `ImpImporter`）时 jieba 照样能读词典 |
 | `test_structure.py` | 每个源码文件在 ARCHITECTURE.md 里都有一行、每个模块都从 `__init__.py` 导入到；超过 600 行时警告 |
 | `test_tuning.py` | 生成预设：什么都不设时和以前一样（同语言 standard，跨语言 stable）、各层的先后、预设文件的校验和读写、角色的 `by_language`、节点上只有改过的值才算数 |
 | `test_versions.py` | SoVITS 版本识别（文件头 `00`~`08`）、每个版本要哪些底模、LoRA 合并（`W + B @ A`）、旋转位置编码和梅尔滤波器与 x-transformers / librosa 一致（装了才比） |

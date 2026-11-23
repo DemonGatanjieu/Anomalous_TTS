@@ -2,6 +2,10 @@
 
 写给用户看的变化。实现细节看 Git 历史，接口变化看 [docs/INTERFACE.md](docs/INTERFACE.md) 的变更记录。
 
+## 未发布
+
+- Python 3.12 及以上、装的 setuptools 又比较旧时，中文一读就报错（`module 'pkgutil' has no attribute 'ImpImporter'`，B站观众反馈）。现在中文照常能读，ComfyUI 的日志里会提示一行怎么升级 setuptools。
+
 ## v1.1.1（2026-10-28）
 可以删除整个角色（接口版本 19）。配合 Anomalous Model Browser 1.61.1 起的版本使用。
 
